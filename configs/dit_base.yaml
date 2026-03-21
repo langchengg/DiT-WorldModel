@@ -1,0 +1,77 @@
+# DiT-B World Model Configuration
+# hidden=768, depth=12, heads=12, ~86M params
+
+model:
+  architecture: "dit_base"
+  img_size: 64
+  patch_size: 4
+  in_channels: 6
+  hidden_size: 768
+  depth: 12
+  num_heads: 12
+  mlp_ratio: 4.0
+  action_dim: 18
+  num_diffusion_steps: 1000
+  out_channels: 3
+  drop_rate: 0.1
+  num_reward_classes: 3
+
+diffusion:
+  num_timesteps: 1000
+  schedule_type: "cosine"
+  prediction_type: "epsilon"
+  loss_type: "mse"
+
+sampler:
+  num_steps: 30
+  eta: 0.0
+  clip_denoised: true
+
+training:
+  batch_size: 16           # Smaller batch for larger model
+  lr: 1e-4                 # Lower lr for larger model
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  warmup_steps: 10000
+  total_steps: 400000
+  num_epochs: 200
+  use_amp: true
+  save_every: 10
+
+  progressive:
+    enabled: true
+    min_steps: 10
+    max_steps: 100
+    warmup_epochs: 20
+    schedule: "cosine"
+
+  # Progressive resolution
+  resolution:
+    enabled: true
+    stages:
+      - epoch: 0
+        size: 32
+      - epoch: 30
+        size: 64
+
+  augmentation:
+    enabled: false
+
+evaluation:
+  every: 20
+  fid_num_samples: 2000
+  num_trajectory_steps: 50
+
+world_model_env:
+  horizon: 15
+  num_history: 1
+
+wandb:
+  enabled: true
+  project: "dit-worldmodel"
+
+environment:
+  type: "atari"
+  game: "BreakoutNoFrameskip-v4"
+  frame_stack: 1
+  img_size: 64

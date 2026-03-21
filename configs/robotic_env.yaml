@@ -1,0 +1,97 @@
+# Robotic Environment Configuration
+# For MetaWorld / RoboSuite transfer experiments
+
+model:
+  architecture: "dit_small"
+  img_size: 64
+  patch_size: 4
+  in_channels: 6
+  hidden_size: 384
+  depth: 12
+  num_heads: 6
+  mlp_ratio: 4.0
+  action_dim: 256         # Discretized continuous actions (256 bins)
+  num_diffusion_steps: 1000
+  out_channels: 3
+  drop_rate: 0.1
+  num_reward_classes: 3
+
+  # Multi-scale temporal attention
+  temporal_attention:
+    enabled: true
+    num_scales: 3
+    scales: [1, 2, 4]
+    num_heads: 4
+
+diffusion:
+  num_timesteps: 1000
+  schedule_type: "cosine"
+  prediction_type: "epsilon"
+  loss_type: "mse"
+
+sampler:
+  num_steps: 25
+  eta: 0.0
+  clip_denoised: true
+
+# Action discretization for continuous robot actions
+action_discretizer:
+  type: "uniform"          # "uniform" or "kmeans"
+  num_bins: 256
+  action_dim: 4            # MetaWorld: 4-DOF
+  low: -1.0
+  high: 1.0
+
+training:
+  batch_size: 32
+  lr: 3e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  warmup_steps: 5000
+  total_steps: 200000
+  num_epochs: 100
+  use_amp: true
+  save_every: 5
+
+  progressive:
+    enabled: true
+    min_steps: 10
+    max_steps: 100
+    warmup_epochs: 10
+    schedule: "linear"
+
+  # Robotic data augmentation
+  augmentation:
+    enabled: true
+    color_jitter: true
+    spatial_crop: true
+    camera_noise: true
+    temporal_dropout: true
+    gaussian_noise: true
+    horizontal_flip: false  # Don't flip robot tasks
+
+evaluation:
+  every: 10
+  fid_num_samples: 500
+  num_trajectory_steps: 30
+
+world_model_env:
+  horizon: 20              # Longer horizon for robot tasks
+  num_history: 4           # More history for robot tasks
+
+wandb:
+  enabled: true
+  project: "dit-worldmodel-robot"
+
+# MetaWorld environment configuration
+environment:
+  type: "metaworld"
+  tasks:
+    - "reach-v2"
+    - "push-v2"
+    - "pick-place-v2"
+    - "drawer-open-v2"
+    - "door-open-v2"
+  img_size: 64
+  max_episode_steps: 200
+  num_cameras: 1           # Single camera (can extend to multi-view)

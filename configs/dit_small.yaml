@@ -1,0 +1,69 @@
+# DiT-S World Model Configuration
+# hidden=384, depth=12, heads=6, ~22M params
+
+model:
+  architecture: "dit_small"
+  img_size: 64
+  patch_size: 4
+  in_channels: 6        # 3 (noisy target) + 3 (RGB history context)
+  hidden_size: 384
+  depth: 12
+  num_heads: 6
+  mlp_ratio: 4.0
+  action_dim: 18         # Atari action space
+  num_diffusion_steps: 1000
+  out_channels: 3
+  drop_rate: 0.0
+  num_reward_classes: 3   # {-1, 0, +1}
+
+diffusion:
+  num_timesteps: 1000
+  schedule_type: "cosine"
+  prediction_type: "epsilon"
+  loss_type: "mse"
+
+sampler:
+  num_steps: 20           # DDIM steps for inference
+  eta: 0.0                # Deterministic sampling
+  clip_denoised: true
+
+training:
+  batch_size: 32
+  lr: 3e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  warmup_steps: 5000
+  total_steps: 200000
+  num_epochs: 100
+  use_amp: true
+  save_every: 5
+
+  progressive:
+    enabled: true
+    min_steps: 10
+    max_steps: 100
+    warmup_epochs: 10
+    schedule: "linear"
+
+  augmentation:
+    enabled: false         # No augmentation for Atari
+
+evaluation:
+  every: 10                # Evaluate every N epochs
+  fid_num_samples: 1000
+  num_trajectory_steps: 50
+
+world_model_env:
+  horizon: 15
+  num_history: 1
+
+wandb:
+  enabled: false
+  project: "dit-worldmodel"
+  entity: null
+
+environment:
+  type: "atari"
+  game: "BreakoutNoFrameskip-v4"
+  frame_stack: 1
+  img_size: 64
