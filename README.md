@@ -1,190 +1,161 @@
 <div align="center">
 
 # 🤖 DiT-WorldModel 
-**基于 Diffusion Transformer 的机器人交互式世界模型**
+**Interactive World Model for Robotic Control based on Diffusion Transformers**
 
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1+-EE4C2C.svg?logo=pytorch)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Paper](https://img.shields.io/badge/Based_on-DIAMOND_(NeurIPS_2024)-4b44ce.svg)](https://arxiv.org/abs/2405.12399)
 [![Open In Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com)
 
-[**核心特性**](#✨-核心特性) • [**快速开始**](#🚀-快速开始) • [**复现指南**](#📚-Notebook-指南) • [**实验结果**](#📊-实验结果) • [**TODO**](#🎯-TODO)
+[**Core Features**](#✨-core-features) • [**Quick Start**](#🚀-quick-start) • [**Notebook Guide**](#📚-notebook-guide) • [**Experimental Results**](#📊-experimental-results) • [**TODO**](#🎯-todo)
 
 </div>
 
-> **TL;DR**: 本项目在顶级会议 NeurIPS 2024 Spotlight 论文 [DIAMOND](https://arxiv.org/abs/2405.12399) 的基础上，将其 U-Net 替换为极具扩展性的 **Diffusion Transformer (DiT)**，并从 Atari 游戏**进一步扩展至连续控制的机器人操作场景**。我们独创了渐进式扩散训练与多尺度时序注意力机制，在大幅提升训练效率（+23%）的同时，降低了生成视频的 FID 距离（-12%）。
+> **TL;DR**: Building upon the NeurIPS 2024 Spotlight paper [DIAMOND](https://arxiv.org/abs/2405.12399), this project replaces the traditional U-Net architecture with a highly scalable **Diffusion Transformer (DiT)** and extends the scope from Atari games to **continuous control in robotic manipulation**. We introduce novel Progressive Diffusion Training and Multi-Scale Temporal Attention mechanisms, significantly improving training efficiency (+23%) while decreasing the generated video's FID (-12%).
 
 ---
 
-## 🏗️ 架构设计与世界模型想象力
+## 🏗️ Architecture Design & World Model Imagination
 
-DiT-WorldModel 通过扩散模型强大的生成能力推演未来的环境状态（即“想象力”，Imagination），从而在无需与真实环境交互的情况下为强化学习提供海量训练数据。
+DiT-WorldModel leverages the powerful generative capabilities of diffusion models to infer future environmental states ("Imagination"), providing massive amounts of training data for Reinforcement Learning (RL) without requiring costly real-world interactions.
 
 <div align="center">
   <img src="all_images/imagination.png" alt="World Model Imagination" width="80%">
-  <p><i>图 1: 世界模型内部推演 (Imagination) 示意图。基于历史观察与动作，对未来的状态转移进行像素级的扩散生成。</i></p>
+  <p><i>Figure 1: Illustration of World Model Imagination. Based on historical observations and actions, it performs pixel-level diffusion generation for future state transitions.</i></p>
 </div>
 
-相比于传统的 U-Net，本模型利用 **Diffusion Transformer (DiT)** 的全局感知能力捕捉复杂的物体交互，摒弃了局部的卷积范式，并通过 `adaLN-Zero` 高效注入动作条件进行前向扩散。
+Compared to the traditional U-Net, our model utilizes the global receptive field of a **Diffusion Transformer (DiT)** to capture complex object interactions. We discard the local convolution paradigm and efficiently inject action conditions into the forward diffusion process via `adaLN-Zero`.
 
 <div align="center">
   <img src="all_images/forward_diffusion.png" alt="Forward Diffusion Process" width="80%">
-  <p><i>图 2: 前向扩散 (Forward Diffusion) 过程与 DiT 数据流架构。动作指令直接嵌入扩散去噪的深层网络中。</i></p>
+  <p><i>Figure 2: Forward Diffusion process and DiT data flow. Action commands are directly embedded deep into the diffusion denoising network.</i></p>
 </div>
 
-**模型变体提供**:
-- `DiT-S` (22M): 适合单卡 T4/RTX 3060 本地快速实验
-- `DiT-B` (86M): 适合云端 V100/A100 的学术级复现
-- `DiT-L` (304M): 用于超大规模环境的 Multi-GPU 训练
+**Available Model Variants**:
+- `DiT-S` (22M): Suitable for quick local experiments on a single T4/RTX 3060.
+- `DiT-B` (86M): Ideal for academic-level reproduction on cloud V100/A100 instances.
+- `DiT-L` (304M): Designed for multi-GPU training in ultra-large-scale environments.
 
 ---
 
-## ✨ 核心特性
+## ✨ Core Features
 
-本项目在原始生态的基础上做出了以下 **5 项架构级创新**：
+This project introduces **5 architecture-level innovations**:
 
-### 1. 渐进式扩散调度 (Progressive Diffusion Training)
-训练初期只使用少量扩散步数（如 10 步）学习全局框架，后期增加至 100 步刻画细节，收敛速度提升 23%。
+### 1. Progressive Diffusion Training
+During the initial training phase, the model uses a low number of diffusion steps (e.g., 10 steps) to grasp the global layout. As training progresses, steps are gradually increased to 100 to carve out fine textures, accelerating overall convergence speed by 23%.
 
 <div align="center">
   <img src="all_images/progressive_schedule.png" alt="Progressive Schedule" width="48%">
   <img src="all_images/noise_schedule.png" alt="Noise Schedule" width="48%">
-  <p><i>图 3: 左侧为渐进式扩散调度策略随时间的变化，右侧为不同训练阶段下使用的非线性噪声注入调度（Noise Schedule）。</i></p>
+  <p><i>Figure 3: Over-time adjustments of the Progressive Diffusion schedule (left), and the non-linear noise injection schedule across different training phases (right).</i></p>
 </div>
 
-### 2. 连续机器人动作迁移与离散化
-为了将生成范式从纯按键输入的 Atari 游戏迁移至连续动作的机械臂领域，系统内置了多维度连续动作离散化模块（支持均匀分箱与 K-Means 聚类），轻松无缝对接 MetaWorld 环境。
+### 2. Continuous Robot Action Transfer & Discretization
+To smoothly transition the generative paradigm from discrete keyboard inputs (Atari) to continuous action domains (Robotic Manipulators), the system integrates a multi-dimensional continuous action discretization module (supporting uniform binning and K-Means clustering), cleanly interfacing with the MetaWorld environment.
 
 <div align="center">
   <img src="all_images/action_discretization.png" alt="Action Discretization" width="48%">
   <img src="all_images/robot_training.png" alt="Continuous Robot Training" width="48%">
-  <p><i>图 4: 连续控制动作空间在潜在表征中的 K-Means 聚类离散化（左），及其在真实机器人连续控制训练场景中的应用测试（右）。</i></p>
+  <p><i>Figure 4: K-Means clustering discretization of the continuous control action space in the latent representation (left), and its application test in simulated real-world continuous robotic training (right).</i></p>
 </div>
 
-### 3. 时序一致性数据增强 (Temporal Consistent Augmentation)
-专为强化学习设计的序列增强管线（包含颜色抖动、空间裁剪、模拟相机抖动等），由于处理的是连续帧，我们的算法确保了跨帧增强特征不割裂，维持动力学连续性。
+### 3. Temporal Consistent Augmentation
+A sequential augmentation pipeline custom-built for RL (including color jitter, spatial cropping, and simulated camera shake). Since it processes continuous frames, our algorithm guarantees cross-frame feature consistency, maintaining kinematic continuity.
 
 <div align="center">
   <img src="all_images/temporal_augmentation.png" alt="Temporal Augmentation" width="80%">
-  <p><i>图 5: 时序一致性数据增强能够保证序列中相邻帧画面扰动的连贯性，从而避免生成环境时产生的闪烁伪影。</i></p>
+  <p><i>Figure 5: Temporal consistent data augmentation prevents disjoint perturbations across adjacent frames, eliminating flickering artifacts during environment generation.</i></p>
 </div>
 
 ### 4. DiT Backbone (adaLN-Zero)
-摒弃了局部的 U-Net 卷积架构，利用 Self-Attention 的全局感知能力捕捉复杂的物体交互，并通过 `adaLN-Zero` 高效注入动作条件。
+Replaces the localized U-Net convolution architecture. Uses Self-Attention's global perception to model complex inter-object physics, efficiently injecting action conditions using `adaLN-Zero` modulations.
 
-### 5. 多尺度时序注意力 (Multi-Scale Temporal Attention)
-引入 `dilation=[1, 2, 4]` 的因果约束自注意力块，使模型同时看懂“瞬间接触”、“持续受力”与“宏观状态转移”。
+### 5. Multi-Scale Temporal Attention
+Introduces causal self-attention blocks with `dilation=[1, 2, 4]`. This enables the model to simultaneously comprehend "instantaneous contacts", "continuous applied forces", and "macro state transitions" over time.
 
 ---
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 1. 环境准备
+### 1. Environment Setup
 
 ```bash
 git clone https://github.com/langchengg/DiT-WorldModel.git
 cd DiT-WorldModel
 
-# 建议使用虚拟环境
+# Virtual environment recommended
 conda create -n wm python=3.10
 conda activate wm
 pip install -r requirements.txt
 ```
 
-### 2. 本地冒烟测试 (Demo)
+### 2. Local Smoke Test (Demo)
 
-只需 1 分钟即可在本地完全无依赖测试整个模型的前向/反向传播与 AMP 混合精度训练：
+It only takes 1 minute to locally test the forward/backward passes and AMP mixed-precision training without strict dependencies:
 
 ```bash
-# 使用合成随机数据运行 5 个 Epoch
+# Run 5 epochs using synthetic random data
 python main.py --config configs/dit_small.yaml --demo --epochs 5
 ```
 
-### 3. 正式训练
+### 3. Full Training
 
 ```bash
-# 训练 Atari 游戏 (如 Breakout)
+# Train on Atari games (e.g., Breakout)
 python main.py --config configs/dit_small.yaml --batch_size 32
 
-# 训练机器人连贯动作 (MetaWorld)
+# Train continuous robotic control (MetaWorld)
 python main.py --config configs/robotic_env.yaml
 ```
 
 ---
 
-## 📚 Notebook 指南
+## 📚 Notebook Guide
 
-对于想在 Kaggle / Colab 白嫖算力的开发者，我们在 `notebooks/` 下准备了全套环境：
+For researchers wanting to utilize free cloud compute (Kaggle/Colab), we have prepared a complete environment under the `notebooks/` directory:
 
-1. 💻 `01_reproduction.py`：基础框架复现与 DiT 创新原理解析。能够直接在 T4 单卡上运行出 Atari 环境第一版 Demo。
-2. 🔬 `02_dit_ablation.py`：学术级消融实验代码，涵盖 Patch Size、Depth 修改对比、渐进式调度器收益可视化。
-3. 🦾 `03_robotic_transfer.py`：真实机器人迁移测试，展示了如何用 K-Means 处理连续 Action 潜空间。
+1. 💻 `01_reproduction.py`: Core framework replication and breakdown of DiT innovation principles. Capable of yielding the first Atari demo on a single T4 GPU.
+2. 🔬 `02_dit_ablation.py`: Academic-grade ablation experiments, covering Patch Size and Depth modifications, alongside visual validation of the progressive diffusion scheduler's gains.
+3. 🦾 `03_robotic_transfer.py`: Sim-to-real robotic transfer testing, showcasing continuous action latent space discretization using K-Means.
 
 ---
 
-## 📊 实验结果与评估
+## 📊 Experimental Results & Evaluation
 
-> 📌 **注**: FID 计算取 1000 帧生成图像与真实帧的距离。数值越小代表生成越逼真。
+> 📌 **Note**: FID is calculated based on the distance between 1000 generated frames and real frames. A lower value indicates higher fidelity generation.
 
-| 对比模型 | Breakout FID ↓ | Pong FID ↓ | RL 规划奖励 ↑ | 参数量 | T4 训练时长 |
+| Model / Architecture | Breakout FID ↓ | Pong FID ↓ | RL Planning Reward ↑ | Parameters | T4 Training Time |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| 原始 DIAMOND (U-Net) | 24.3 | 19.8 | 372 | ~45M | 40h |
+| Original DIAMOND (U-Net) | 24.3 | 19.8 | 372 | ~45M | 40h |
 | **DiT-S (Ours)** | **21.5** | **17.2** | **391** | ~38M | 35h |
-| DiT-S + 渐进式训练 | 21.8 | 17.5 | 388 | ~38M | **27h** |
-| DiT-S + 多尺度时序 | **20.1** | **16.8** | **405** | ~42M | 38h |
+| DiT-S + Progressive Training | 21.8 | 17.5 | 388 | ~38M | **27h** |
+| DiT-S + Multi-Scale Temporal | **20.1** | **16.8** | **405** | ~42M | 38h |
 
-通过引入渐进式训练，我们在相同 Epochs 下显著拉低了 Generator 和 Actor/Critic 网络的 Loss。
+By introducing Progressive Diffusion Training, we significantly reduced the loss of the Generator and Actor/Critic networks across identical epochs.
 
 <div align="center">
   <img src="all_images/demo_training_loss.png" alt="Demo Training Loss Curve" width="80%">
-  <p><i>图 6: 训练过程中的 Loss 曲线，Generator, Actor, Critic Loss 平稳收敛。</i></p>
+  <p><i>Figure 6: Smooth convergence of Generator, Actor, and Critic Loss curves over the training timeline.</i></p>
 </div>
 
 ---
 
 ## 🎯 TODO
 
-- [x] 核心模型研发 (DiT Backbone)
-- [x] Atari 基准测试管道
-- [x] 解决机器人动作连续性的离散化处理
-- [ ] 接入完整的 MetaWorld 强化学习 Actor-Critic PPO 循环
-- [ ] 支持 Multi-Camera RGB-D 端到端输入
-- [ ] DDP (Distributed Data Parallel) 多卡训练脚本支持
+- [x] Core Model Research (DiT Backbone)
+- [x] Atari Evaluation Pipeline Setup
+- [x] Action Discretization for Continuous Robotic Control
+- [ ] Integration with complete MetaWorld Actor-Critic PPO RL loops
+- [ ] Support for Multi-Camera RGB-D End-to-End Inputs
+- [ ] DDP (Distributed Data Parallel) Multi-GPU Training Script Support
 
 ---
 
-<details>
-<summary><b>👨‍💻 面试与简历包装指南 (For Job Seekers)</b></summary>
-<br>
+## 📄 Citation & Acknowledgements
 
-由于这个项目的含金量非常高（涉及目前最前沿的 `Diffusion + Transformer + RL` 三位一体），如果你正在寻找算法或具身智能岗位，建议在简历中按以下逻辑书写：
-
-### ✅ 推荐的简历句式
-
-```text
-项目: DiT-WorldModel — 基于 Diffusion Transformer 的机器人交互式世界模型
-
-• 主导设计基于 Diffusion Transformer (DiT) 的世界模型框架，利用 adaLN-Zero 机制实现动作条件高阶注入，彻底替换原始 U-Net 范式，在 Atari 评测基准上生成视频 FID 降低 12%，参数利用率提升 18%。
-• 自研提出渐进式扩散训练策略（Progressive Diffusion Training），训练初期使用少量扩散步数把握全局状态，后期递增刻画纹理，使全程收敛速度跃升 23%，节省 30% 算力开销。
-• 设计因果约束的"多尺度时序注意力 (Multi-scale Temporal Attention)"，通过不同扩展率抓取物体的短期接触与长期轨迹，长序列预测的感知损失 (LPIPS) 改善 15%。
-• 攻克 Sim-to-Real 的算法迁移难题，设计了一套时序极度一致的数据增强管线，并通过非均匀连续动作离散化 (K-Means Action Encoding)，成功在模拟器上验证了模型具备表征连续机械臂控制的能力。
-```
-
-### 💡 高频面试 Q&A
-
-**Q1: 为什么想到用 DiT 替换 U-Net 作世界模型？**
-> **话术**: 从理论上看，U-Net 有强烈的局部归纳偏置（卷积），这在处理画图时很好，但在“世界模型”中，我们需要理解全局动态交互（例如屏幕左边的球会打碎右边的砖块）；DiT 是全局自注意力的，能瞬间捕捉远距离因果。工程上讲，Transformer block 高度统一，更容易复用目前的大模型优化技巧。经过我个人严谨实验，在几乎同等显存开销下，DiT 生成视频的 FID 和后续强化学习得分都超过了 U-Net。
-
-**Q2: 你的这个“渐进式训练（Progressive Training）”是怎么来的？**
-> **话术**: 灵感源于 GAN 时代的 Progressive GAN（先学生成小图再学大图）。考虑到扩散模型的核心是 denoising 步数，我在训练初期只让模型做 10 步扩散（相当于学习物体轮廓和大色块），随着 Epoch 推移再拉高到 100 步去雕刻细节。这样既降低了前期的无效算力浪费，又能形成天然的课程式学习 (Curriculum Learning)，最后收敛速度实打实地提升了 20% 以上。
-
-</details>
-
----
-
-## 📄 引用与鸣谢
-
-本项目部分灵感来源于 Eloi Alonso 等人的出色工作：
+Part of the inspiration for this project comes from the outstanding work by Eloi Alonso et al.:
 ```bibtex
 @inproceedings{alonso2024diffusion,
   title={Diffusion for World Modeling: Visual Details Matter in Atari},
