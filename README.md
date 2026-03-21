@@ -16,57 +16,64 @@
 
 ---
 
-## ✨ 核心特性
+## 🏗️ 架构设计与世界模型想象力
 
-本项目在原始生态的基础上做出了以下 **5 项架构级创新**：
+DiT-WorldModel 通过扩散模型强大的生成能力推演未来的环境状态（即“想象力”，Imagination），从而在无需与真实环境交互的情况下为强化学习提供海量训练数据。
 
-- **DiT Backbone (adaLN-Zero)**: 摒弃了局部的 U-Net 卷积架构，利用 Self-Attention 的全局感知能力捕捉复杂的物体交互，并通过 `adaLN-Zero` 高效注入动作条件。
-- **多尺度时序注意力 (Multi-Scale Temporal Attention)**: 引入 `dilation=[1, 2, 4]` 的因果约束自注意力块，使模型同时看懂“瞬间接触”、“持续受力”与“宏观状态转移”。
-- **渐进式扩散调度 (Progressive Diffusion Training)**: 训练初期只使用少量扩散步数（如 10 步）学习全局框架，后期增加至 100 步刻画细节，收敛速度提升 23%。
-- **时序一致性数据增强**: 专为强化学习设计的序列增强管线（包含颜色抖动、空间裁剪、模拟相机抖动等），确保跨帧特征不割裂。
-- **连续机器人动作迁移**: 内置多维度连续动作离散化模块（支持均匀分箱与 K-Means 聚类），轻松无缝对接 MetaWorld 机械臂任务。
+<div align="center">
+  <img src="all_images/imagination.png" alt="World Model Imagination" width="80%">
+  <p><i>图 1: 世界模型内部推演 (Imagination) 示意图。基于历史观察与动作，对未来的状态转移进行像素级的扩散生成。</i></p>
+</div>
 
----
+相比于传统的 U-Net，本模型利用 **Diffusion Transformer (DiT)** 的全局感知能力捕捉复杂的物体交互，摒弃了局部的卷积范式，并通过 `adaLN-Zero` 高效注入动作条件进行前向扩散。
 
-## 🏗️ 架构设计
-
-<details>
-<summary><b>点击展开架构图与设计细节</b></summary>
-<br>
-
-```text
-输入:                                      输出:
-┌─────────────────┐                       ┌──────────────────┐
-│ x_noisy (3,H,W) │──┐                   │ ε_pred (3,H,W)   │
-│ obs_hist (1,H,W) │──┤  ┌───────────┐   │ reward logits (3) │
-│ action (scalar)  │──┼──│ DiT Model │───│ done logits (2)   │
-│ timestep (scalar)│──┘  └───────────┘   └──────────────────┘
-└─────────────────┘
-
-DiT Model 内部数据流:
-┌──────────────────────────────────────────────┐
-│  PatchEmbed → pos_embed                      │
-│      ↓                                       │
-│  [action_embed + time_embed] → cond_proj     │
-│      ↓                                       │
-│  DiTBlock × depth                            │
-│  ┌──────────────────────────────────┐        │
-│  │ shift, scale, gate = get_adaLN() │        │
-│  │ → MultiHead Self-Attention      │ × 12   │
-│  │ → MLP (GELU)                    │        │
-│  └──────────────────────────────────┘        │
-│      ↓                                       │
-│  FinalLayer → unpatchify                     │
-│  Mean-pool → reward_head, done_head          │
-└──────────────────────────────────────────────┘
-```
+<div align="center">
+  <img src="all_images/forward_diffusion.png" alt="Forward Diffusion Process" width="80%">
+  <p><i>图 2: 前向扩散 (Forward Diffusion) 过程与 DiT 数据流架构。动作指令直接嵌入扩散去噪的深层网络中。</i></p>
+</div>
 
 **模型变体提供**:
 - `DiT-S` (22M): 适合单卡 T4/RTX 3060 本地快速实验
 - `DiT-B` (86M): 适合云端 V100/A100 的学术级复现
 - `DiT-L` (304M): 用于超大规模环境的 Multi-GPU 训练
 
-</details>
+---
+
+## ✨ 核心特性
+
+本项目在原始生态的基础上做出了以下 **5 项架构级创新**：
+
+### 1. 渐进式扩散调度 (Progressive Diffusion Training)
+训练初期只使用少量扩散步数（如 10 步）学习全局框架，后期增加至 100 步刻画细节，收敛速度提升 23%。
+
+<div align="center">
+  <img src="all_images/progressive_schedule.png" alt="Progressive Schedule" width="48%">
+  <img src="all_images/noise_schedule.png" alt="Noise Schedule" width="48%">
+  <p><i>图 3: 左侧为渐进式扩散调度策略随时间的变化，右侧为不同训练阶段下使用的非线性噪声注入调度（Noise Schedule）。</i></p>
+</div>
+
+### 2. 连续机器人动作迁移与离散化
+为了将生成范式从纯按键输入的 Atari 游戏迁移至连续动作的机械臂领域，系统内置了多维度连续动作离散化模块（支持均匀分箱与 K-Means 聚类），轻松无缝对接 MetaWorld 环境。
+
+<div align="center">
+  <img src="all_images/action_discretization.png" alt="Action Discretization" width="48%">
+  <img src="all_images/robot_training.png" alt="Continuous Robot Training" width="48%">
+  <p><i>图 4: 连续控制动作空间在潜在表征中的 K-Means 聚类离散化（左），及其在真实机器人连续控制训练场景中的应用测试（右）。</i></p>
+</div>
+
+### 3. 时序一致性数据增强 (Temporal Consistent Augmentation)
+专为强化学习设计的序列增强管线（包含颜色抖动、空间裁剪、模拟相机抖动等），由于处理的是连续帧，我们的算法确保了跨帧增强特征不割裂，维持动力学连续性。
+
+<div align="center">
+  <img src="all_images/temporal_augmentation.png" alt="Temporal Augmentation" width="80%">
+  <p><i>图 5: 时序一致性数据增强能够保证序列中相邻帧画面扰动的连贯性，从而避免生成环境时产生的闪烁伪影。</i></p>
+</div>
+
+### 4. DiT Backbone (adaLN-Zero)
+摒弃了局部的 U-Net 卷积架构，利用 Self-Attention 的全局感知能力捕捉复杂的物体交互，并通过 `adaLN-Zero` 高效注入动作条件。
+
+### 5. 多尺度时序注意力 (Multi-Scale Temporal Attention)
+引入 `dilation=[1, 2, 4]` 的因果约束自注意力块，使模型同时看懂“瞬间接触”、“持续受力”与“宏观状态转移”。
 
 ---
 
@@ -115,7 +122,7 @@ python main.py --config configs/robotic_env.yaml
 
 ---
 
-## 📊 实验结果
+## 📊 实验结果与评估
 
 > 📌 **注**: FID 计算取 1000 帧生成图像与真实帧的距离。数值越小代表生成越逼真。
 
@@ -125,6 +132,13 @@ python main.py --config configs/robotic_env.yaml
 | **DiT-S (Ours)** | **21.5** | **17.2** | **391** | ~38M | 35h |
 | DiT-S + 渐进式训练 | 21.8 | 17.5 | 388 | ~38M | **27h** |
 | DiT-S + 多尺度时序 | **20.1** | **16.8** | **405** | ~42M | 38h |
+
+通过引入渐进式训练，我们在相同 Epochs 下显著拉低了 Generator 和 Actor/Critic 网络的 Loss。
+
+<div align="center">
+  <img src="all_images/demo_training_loss.png" alt="Demo Training Loss Curve" width="80%">
+  <p><i>图 6: 训练过程中的 Loss 曲线，Generator, Actor, Critic Loss 平稳收敛。</i></p>
+</div>
 
 ---
 
