@@ -75,8 +75,8 @@ DiT Model 内部数据流:
 ### 1. 环境准备
 
 ```bash
-git clone https://github.com/YourUsername/DiT-WorldModel-Robotics.git
-cd DiT-WorldModel-Robotics
+git clone https://github.com/langchengg/DiT-WorldModel.git
+cd DiT-WorldModel
 
 # 建议使用虚拟环境
 conda create -n wm python=3.10
