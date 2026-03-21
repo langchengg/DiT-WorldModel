@@ -96,7 +96,7 @@ print(f"\nTotal parameters: {model.get_num_params() / 1e6:.1f}M")
 # Verify forward pass
 x_noisy = torch.randn(2, 3, 64, 64)
 t = torch.randint(0, 1000, (2,))
-obs_history = torch.randn(2, 1, 64, 64)
+obs_history = torch.randn(2, 3, 64, 64)   # Changed from 1 to 3 channels (RGB)
 action = torch.randint(0, 18, (2,))
 
 noise_pred, reward_pred, done_pred = model(x_noisy, t, obs_history, action)
