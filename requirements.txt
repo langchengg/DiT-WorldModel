@@ -11,7 +11,7 @@ torchmetrics>=1.2.0
 # RL Environments
 gymnasium>=0.29.1
 ale-py>=0.9.0
-metaworld>=2.0.0
+metaworld>=3.0.0
 
 # Visualization
 opencv-python>=4.8.0
