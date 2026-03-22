@@ -17,11 +17,14 @@
 
 ## 运行方式
 
-    # 默认使用 RECON 真实数据路径 (若未提供 data_dir, 尝试走 sample 下载路径):
+    # 默认使用 RECON 真实数据路径 (若未提供 data_dir, 自动下载完整 RECON):
     python notebooks/04_navigation_demo.py
 
     # 显式使用 RECON 数据集:
     python notebooks/04_navigation_demo.py --dataset recon --data_dir /path/to/recon
+
+    # 仅在快速调试时下载 sample:
+    python notebooks/04_navigation_demo.py --dataset recon --download_mode sample
 
     # 使用 TartanDrive 数据集:
     python notebooks/04_navigation_demo.py --dataset tartan --data_dir /path/to/tartan
@@ -51,6 +54,19 @@ parser.add_argument("--data_dir", type=str, default=None,
                     help="Data directory for recon/tartan datasets")
 parser.add_argument("--epochs", type=int, default=5,
                     help="Training epochs")
+parser.add_argument("--batch_size", type=int, default=16,
+                    help="Maximum training batch size")
+parser.add_argument("--eval_ratio", type=float, default=0.1,
+                    help="Fraction of full trajectories reserved for eval")
+parser.add_argument("--download_mode", type=str, default="full",
+                    choices=["full", "sample"],
+                    help="RECON download mode when data_dir is omitted")
+parser.add_argument("--sample_num_files", type=int, default=3,
+                    help="Number of RECON files to extract when using sample mode")
+parser.add_argument("--max_trajectories", type=int, default=None,
+                    help="Optional cap on RECON trajectories loaded after download")
+parser.add_argument("--max_runs", type=int, default=None,
+                    help="Optional cap on TartanDrive runs loaded")
 parser.add_argument("--device", type=str, default="auto",
                     help="Device: cuda, cpu, mps, or auto")
 parser.add_argument("--skip_training", action="store_true",
@@ -101,8 +117,12 @@ def resolve_action_dim(dataset_name: str) -> int:
 - tartan:    TartanDrive 越野导航真实数据
 """
 
-from torch.utils.data import DataLoader, random_split
-from navigation.dataset import create_navigation_dataset
+from torch.utils.data import DataLoader
+from navigation.dataset import (
+    create_navigation_dataset,
+    get_num_trajectories,
+    split_navigation_dataset_by_trajectory,
+)
 
 dataset_kwargs = {
     "dataset_type": args.dataset,
@@ -110,6 +130,10 @@ dataset_kwargs = {
     "img_size": 64,
     "obs_history_len": 1,
     "action_bins": ACTION_BINS,
+    "download_mode": args.download_mode,
+    "sample_num_files": args.sample_num_files,
+    "max_trajectories": args.max_trajectories,
+    "max_runs": args.max_runs,
 }
 if args.dataset == "synthetic":
     dataset_kwargs.update({
@@ -127,24 +151,27 @@ if len(dataset) == 0:
         "Check that the downloaded files match the expected schema and are not corrupted."
     )
 
-eval_size = 0
-if len(dataset) > 8:
-    eval_size = min(max(4, len(dataset) // 10), len(dataset) - 1)
-elif len(dataset) > 1:
-    eval_size = 1
+num_trajectories = get_num_trajectories(dataset)
+train_dataset, eval_dataset, split_info = split_navigation_dataset_by_trajectory(
+    dataset,
+    eval_ratio=args.eval_ratio,
+    min_eval_trajectories=1,
+    seed=42,
+)
 
-if eval_size > 0:
-    train_size = len(dataset) - eval_size
-    train_dataset, eval_dataset = random_split(
-        dataset,
-        [train_size, eval_size],
-        generator=torch.Generator().manual_seed(42),
+if len(train_dataset) == 0:
+    raise RuntimeError(
+        f"Trajectory split for '{args.dataset}' produced 0 training samples. "
+        "Increase the dataset size or reduce eval_ratio."
     )
-else:
-    train_dataset = dataset
-    eval_dataset = dataset
 
-train_batch_size = min(16, max(1, len(train_dataset)))
+if len(eval_dataset) == 0:
+    raise RuntimeError(
+        f"Trajectory split for '{args.dataset}' produced 0 eval samples. "
+        "At least two trajectories are required for a real held-out evaluation."
+    )
+
+train_batch_size = min(args.batch_size, max(1, len(train_dataset)))
 train_loader = DataLoader(
     train_dataset,
     batch_size=train_batch_size,
@@ -153,10 +180,20 @@ train_loader = DataLoader(
     drop_last=False,
 )
 
+steps_per_epoch = max(1, len(train_loader))
+total_train_steps = max(1, steps_per_epoch * args.epochs)
+warmup_steps = min(total_train_steps, max(steps_per_epoch, total_train_steps // 10))
+
 print(f"\n📊 Dataset: {args.dataset}")
 print(f"   Total samples: {len(dataset)}")
 print(f"   Train samples: {len(train_dataset)}")
 print(f"   Eval samples:  {len(eval_dataset)}")
+print(f"   Trajectories:  {num_trajectories}")
+print(f"   Train trajs:   {split_info['train_trajectories']}")
+print(f"   Eval trajs:    {split_info['eval_trajectories']}")
+print(f"   Steps/epoch:   {steps_per_epoch}")
+print(f"   Warmup steps:  {warmup_steps}")
+print(f"   Total steps:   {total_train_steps}")
 
 # Visualize a sample
 sample = eval_dataset[0]
@@ -237,8 +274,8 @@ if not args.skip_training:
         model=model,
         diffusion=diffusion,
         lr=3e-4,
-        warmup_steps=500,
-        total_steps=50000,
+        warmup_steps=warmup_steps,
+        total_steps=total_train_steps,
         use_amp=(device == "cuda"),
         device=device,
         output_dir="outputs/navigation",
@@ -291,10 +328,12 @@ def predict_next_frame(sample_dict):
         device=device,
     )
     pred_next_b = pred_next_b.clamp(0, 1)
+    copy_last_b = obs_ctx_b.clamp(0, 1)
 
     return {
         "obs_ctx": obs_ctx_b.squeeze(0).cpu(),
         "gt_next": gt_next_b.squeeze(0).cpu(),
+        "copy_last": copy_last_b.squeeze(0).cpu(),
         "pred_next": pred_next_b.squeeze(0).cpu(),
         "action": int(sample_dict["action"].item()),
         "reward_logits": reward_logits.squeeze(0).cpu(),
@@ -381,21 +420,26 @@ else:
 
     print(f"  Evaluating {num_vis} held-out real samples ...")
 
-    fig, axes = plt.subplots(2, num_vis, figsize=(3 * num_vis, 6))
+    fig, axes = plt.subplots(3, num_vis, figsize=(3 * num_vis, 8))
     if num_vis == 1:
-        axes = np.array(axes).reshape(2, 1)
+        axes = np.array(axes).reshape(3, 1)
 
     for i, pred in enumerate(predictions):
         gt_img = pred["gt_next"].permute(1, 2, 0).numpy()
+        copy_img = pred["copy_last"].permute(1, 2, 0).numpy()
         pred_img = pred["pred_next"].permute(1, 2, 0).numpy()
 
         axes[0, i].imshow(np.clip(gt_img, 0, 1))
         axes[0, i].set_title(f"GT next #{i}")
         axes[0, i].axis("off")
 
-        axes[1, i].imshow(np.clip(pred_img, 0, 1))
-        axes[1, i].set_title(f"Pred next | a={pred['action']}")
+        axes[1, i].imshow(np.clip(copy_img, 0, 1))
+        axes[1, i].set_title("Copy-last baseline")
         axes[1, i].axis("off")
+
+        axes[2, i].imshow(np.clip(pred_img, 0, 1))
+        axes[2, i].set_title(f"DiT pred | a={pred['action']}")
+        axes[2, i].axis("off")
 
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR / "4_frames_comparison.png", dpi=150)
@@ -468,14 +512,15 @@ else:
     num_episode = min(8, len(eval_dataset))
     episode_preds = [predict_next_frame(get_eval_sample(i)) for i in range(num_episode)]
 
-    fig, axes = plt.subplots(3, num_episode, figsize=(3 * num_episode, 8))
+    fig, axes = plt.subplots(4, num_episode, figsize=(3 * num_episode, 10))
     if num_episode == 1:
-        axes = np.array(axes).reshape(3, 1)
+        axes = np.array(axes).reshape(4, 1)
 
     video_frames = []
     for i, pred in enumerate(episode_preds):
         ctx_img = pred["obs_ctx"].permute(1, 2, 0).numpy()
         gt_img = pred["gt_next"].permute(1, 2, 0).numpy()
+        copy_img = pred["copy_last"].permute(1, 2, 0).numpy()
         pred_img = pred["pred_next"].permute(1, 2, 0).numpy()
 
         axes[0, i].imshow(np.clip(ctx_img, 0, 1))
@@ -486,11 +531,16 @@ else:
         axes[1, i].set_title("GT next")
         axes[1, i].axis("off")
 
-        axes[2, i].imshow(np.clip(pred_img, 0, 1))
-        axes[2, i].set_title(f"Pred next | a={pred['action']}")
+        axes[2, i].imshow(np.clip(copy_img, 0, 1))
+        axes[2, i].set_title("Copy-last baseline")
         axes[2, i].axis("off")
 
+        axes[3, i].imshow(np.clip(pred_img, 0, 1))
+        axes[3, i].set_title(f"DiT pred | a={pred['action']}")
+        axes[3, i].axis("off")
+
         video_frames.append(pred["gt_next"])
+        video_frames.append(pred["copy_last"])
         video_frames.append(pred["pred_next"])
 
     plt.tight_layout()
@@ -556,54 +606,87 @@ else:
 
     print("\n📊 Held-out real-data evaluation ...")
 
-    tracker = MetricsTracker(device=device)
-    per_sample_metrics = []
+    model_tracker = MetricsTracker(device=device)
+    baseline_tracker = MetricsTracker(device=device)
+    model_per_sample_metrics = []
+    baseline_per_sample_metrics = []
     num_eval_samples = min(32, len(eval_dataset))
 
     for idx in range(num_eval_samples):
         pred = predict_next_frame(get_eval_sample(idx))
-        metrics = tracker.evaluate_batch(
+        model_metrics = model_tracker.evaluate_batch(
             pred["pred_next"].unsqueeze(0),
             pred["gt_next"].unsqueeze(0),
         )
-        per_sample_metrics.append(metrics)
+        baseline_metrics = baseline_tracker.evaluate_batch(
+            pred["copy_last"].unsqueeze(0),
+            pred["gt_next"].unsqueeze(0),
+        )
+        model_per_sample_metrics.append(model_metrics)
+        baseline_per_sample_metrics.append(baseline_metrics)
 
-    ssim_vals = [m["ssim"] for m in per_sample_metrics]
-    psnr_vals = [m["psnr"] for m in per_sample_metrics]
-    lpips_vals = [m["lpips"] for m in per_sample_metrics]
+    model_ssim_vals = [m["ssim"] for m in model_per_sample_metrics]
+    model_psnr_vals = [m["psnr"] for m in model_per_sample_metrics]
+    model_lpips_vals = [m["lpips"] for m in model_per_sample_metrics]
+
+    baseline_ssim_vals = [m["ssim"] for m in baseline_per_sample_metrics]
+    baseline_psnr_vals = [m["psnr"] for m in baseline_per_sample_metrics]
+    baseline_lpips_vals = [m["lpips"] for m in baseline_per_sample_metrics]
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
-    axes[0].plot(ssim_vals, "o-", color="tab:green", markersize=3)
-    axes[0].set_title(f"SSIM | mean={np.mean(ssim_vals):.3f}")
+    axes[0].plot(baseline_ssim_vals, "o-", color="tab:gray", markersize=3, label="Copy-last")
+    axes[0].plot(model_ssim_vals, "o-", color="tab:green", markersize=3, label="DiT")
+    axes[0].set_title(
+        f"SSIM | Copy={np.mean(baseline_ssim_vals):.3f} | DiT={np.mean(model_ssim_vals):.3f}"
+    )
     axes[0].set_xlabel("Held-out sample")
     axes[0].set_ylabel("SSIM")
     axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
 
-    axes[1].plot(psnr_vals, "o-", color="tab:blue", markersize=3)
-    axes[1].set_title(f"PSNR | mean={np.mean(psnr_vals):.2f} dB")
+    axes[1].plot(baseline_psnr_vals, "o-", color="tab:gray", markersize=3, label="Copy-last")
+    axes[1].plot(model_psnr_vals, "o-", color="tab:blue", markersize=3, label="DiT")
+    axes[1].set_title(
+        f"PSNR | Copy={np.mean(baseline_psnr_vals):.2f} dB | DiT={np.mean(model_psnr_vals):.2f} dB"
+    )
     axes[1].set_xlabel("Held-out sample")
     axes[1].set_ylabel("PSNR")
     axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
 
-    axes[2].plot(lpips_vals, "o-", color="tab:orange", markersize=3)
-    axes[2].set_title(f"LPIPS | mean={np.mean(lpips_vals):.3f}")
+    axes[2].plot(baseline_lpips_vals, "o-", color="tab:gray", markersize=3, label="Copy-last")
+    axes[2].plot(model_lpips_vals, "o-", color="tab:orange", markersize=3, label="DiT")
+    axes[2].set_title(
+        f"LPIPS | Copy={np.mean(baseline_lpips_vals):.3f} | DiT={np.mean(model_lpips_vals):.3f}"
+    )
     axes[2].set_xlabel("Held-out sample")
     axes[2].set_ylabel("LPIPS")
     axes[2].grid(True, alpha=0.3)
+    axes[2].legend()
 
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR / "navigation_metrics.png", dpi=150)
     plt.close()
 
-    summary = tracker.get_summary()
+    model_summary = model_tracker.get_summary()
+    baseline_summary = baseline_tracker.get_summary()
     print("\n📊 Summary:")
-    if "ssim" in summary:
-        print(f"   SSIM mean:  {summary['ssim']['mean']:.4f}")
-    if "psnr" in summary:
-        print(f"   PSNR mean:  {summary['psnr']['mean']:.4f}")
-    if "lpips" in summary:
-        print(f"   LPIPS mean: {summary['lpips']['mean']:.4f}")
+    if "ssim" in baseline_summary and "ssim" in model_summary:
+        print(
+            f"   SSIM mean:  Copy={baseline_summary['ssim']['mean']:.4f} | "
+            f"DiT={model_summary['ssim']['mean']:.4f}"
+        )
+    if "psnr" in baseline_summary and "psnr" in model_summary:
+        print(
+            f"   PSNR mean:  Copy={baseline_summary['psnr']['mean']:.4f} | "
+            f"DiT={model_summary['psnr']['mean']:.4f}"
+        )
+    if "lpips" in baseline_summary and "lpips" in model_summary:
+        print(
+            f"   LPIPS mean: Copy={baseline_summary['lpips']['mean']:.4f} | "
+            f"DiT={model_summary['lpips']['mean']:.4f}"
+        )
 
 
 # ============================================================
@@ -619,9 +702,9 @@ else:
 3. 用 progressive training (逐步增加扩散步数)
 
 ### 接入真实数据
-1. 一键下载 RECON sample → python notebooks/04_navigation_demo.py --dataset recon
-   (如果是完整 50G 数据, 下载后: --dataset recon --data_dir /path)
-2. 下载 TartanDrive → python notebooks/04_navigation_demo.py --dataset tartan --data_dir /path
+1. 默认自动下载完整 RECON → python notebooks/04_navigation_demo.py --dataset recon
+2. 快速 smoke test 才使用 sample → python notebooks/04_navigation_demo.py --dataset recon --download_mode sample
+3. 下载 TartanDrive → python notebooks/04_navigation_demo.py --dataset tartan --data_dir /path
 
 ### 提升导航性能
 1. 增加 planning_horizon (8-15)

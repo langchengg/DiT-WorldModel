@@ -16,12 +16,14 @@ Reference:
 """
 
 import os
+import random
+from bisect import bisect_right
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +190,8 @@ class RECONDataset(Dataset):
         obs_history_len: int = 1,
         action_bins: int = 256,
         max_trajectories: Optional[int] = None,
+        download_mode: str = "full",
+        sample_num_files: int = 3,
     ):
         import h5py
         import cv2
@@ -195,12 +199,19 @@ class RECONDataset(Dataset):
         self.img_size = img_size
         self.obs_history_len = obs_history_len
         self.action_bins = action_bins
+        self.download_mode = download_mode
 
-        # Auto-download a sample if data_dir is not provided
+        if download_mode not in {"full", "sample"}:
+            raise ValueError(
+                f"Unsupported RECON download_mode='{download_mode}'. "
+                "Choose from: full, sample"
+            )
+
+        # Resolve default storage location. Auto-download happens only if the
+        # directory does not already contain trajectory files.
         if data_dir is None:
-            data_dir = "data/recon_sample"
+            data_dir = "data/recon" if download_mode == "full" else "data/recon_sample"
             os.makedirs(data_dir, exist_ok=True)
-            self._download_sample(data_dir, num_files=3)
 
         data_path = Path(data_dir)
         hdf5_files = sorted(data_path.glob("*.hdf5"))
@@ -208,8 +219,12 @@ class RECONDataset(Dataset):
             hdf5_files = hdf5_files[:max_trajectories]
 
         if len(hdf5_files) == 0:
-            print(f"⚠️  No HDF5 files found in {data_dir}. Downloading a sample...")
-            self._download_sample(data_dir, num_files=3)
+            mode_desc = "full RECON dataset" if download_mode == "full" else "RECON sample"
+            print(f"⚠️  No HDF5 files found in {data_dir}. Downloading {mode_desc}...")
+            self._download_dataset(
+                extract_dir=data_dir,
+                max_files=None if download_mode == "full" else sample_num_files,
+            )
             hdf5_files = sorted(data_path.glob("*.hdf5"))
 
         if len(hdf5_files) == 0:
@@ -325,44 +340,63 @@ class RECONDataset(Dataset):
             f"{available}"
         )
 
-    def _download_sample(self, extract_dir: str, num_files: int = 3) -> None:
+    def _download_dataset(
+        self,
+        extract_dir: str,
+        max_files: Optional[int] = None,
+    ) -> None:
         """
-        Stream from the 50GB RECON dataset tarball and extract only the first
-        `num_files` .hdf5 files to avoid downloading the entire 50GB.
+        Stream the RECON tarball and extract trajectory HDF5 files.
+
+        If `max_files` is None, extract the full dataset. Otherwise extract only
+        the first `max_files` trajectories for quick smoke tests.
         """
         import tarfile
         import requests
 
         url = "http://rail.eecs.berkeley.edu/datasets/recon-navigation/recon_dataset.tar.gz"
-        print(f"🌐 Streaming from {url} to extract {num_files} sample trajectories...")
+        mode_desc = (
+            "the full RECON dataset"
+            if max_files is None else
+            f"{max_files} RECON sample trajectories"
+        )
+        print(f"🌐 Streaming from {url} to extract {mode_desc}...")
 
         try:
-            # Stream the tar.gz file
             with requests.get(url, stream=True) as r:
                 r.raise_for_status()
-                # Open tarfile from the raw stream
                 with tarfile.open(fileobj=r.raw, mode="r|gz") as tar:
                     extracted_count = 0
+                    skipped_existing = 0
                     for member in tar:
                         if member.name.endswith(".hdf5"):
-                            # Remove the 'recon_release/' prefix from the path
                             filename = os.path.basename(member.name)
                             dest_path = os.path.join(extract_dir, filename)
-                            
-                            # Extract this specific file
-                            print(f"  ⬇️  Extracting {filename}...")
-                            f_in = tar.extractfile(member)
-                            if f_in is not None:
-                                with open(dest_path, "wb") as f_out:
-                                    f_out.write(f_in.read())
+
+                            if os.path.exists(dest_path):
+                                skipped_existing += 1
                                 extracted_count += 1
-                                
-                            if extracted_count >= num_files:
-                                print(f"  ✅ Successfully extracted {num_files} sample files.")
+                            else:
+                                print(f"  ⬇️  Extracting {filename}...")
+                                f_in = tar.extractfile(member)
+                                if f_in is not None:
+                                    with open(dest_path, "wb") as f_out:
+                                        f_out.write(f_in.read())
+                                    extracted_count += 1
+
+                            if max_files is not None and extracted_count >= max_files:
+                                print(f"  ✅ Successfully extracted {max_files} sample files.")
                                 break
-                                
+
+                    if max_files is None:
+                        print(
+                            f"  ✅ Finished extracting RECON into {extract_dir} "
+                            f"({extracted_count - skipped_existing} new files, "
+                            f"{skipped_existing} already present)."
+                        )
+
         except Exception as e:
-            print(f"  ❌ Failed to download sample: {e}")
+            print(f"  ❌ Failed to download RECON dataset: {e}")
 
     def _discretize_action(self, action_2d: np.ndarray) -> torch.Tensor:
         """
@@ -611,7 +645,7 @@ def create_navigation_dataset(
     elif dataset_type == "recon":
         recon_kwargs = {
             k: v for k, v in kwargs.items()
-            if k in {"action_bins", "max_trajectories"}
+            if k in {"action_bins", "max_trajectories", "download_mode", "sample_num_files"}
         }
         return RECONDataset(
             data_dir=data_dir, img_size=img_size,
@@ -631,3 +665,77 @@ def create_navigation_dataset(
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}. "
                          f"Choose from: synthetic, recon, tartan")
+
+
+def get_num_trajectories(dataset: Dataset) -> int:
+    """
+    Return the number of trajectories/episodes if the dataset tracks them.
+    """
+    episode_starts = getattr(dataset, "episode_starts", None)
+    if episode_starts is None:
+        return 0
+    return max(0, len(episode_starts) - 1)
+
+
+def split_navigation_dataset_by_trajectory(
+    dataset: Dataset,
+    eval_ratio: float = 0.1,
+    min_eval_trajectories: int = 1,
+    seed: int = 42,
+) -> Tuple[Subset, Subset, dict]:
+    """
+    Split a navigation dataset by full trajectories instead of random transitions.
+
+    This avoids leakage where nearly identical adjacent frames from the same
+    trajectory appear in both training and evaluation.
+    """
+    episode_starts = getattr(dataset, "episode_starts", None)
+    valid_indices = getattr(dataset, "_valid_indices", None)
+    if episode_starts is None or valid_indices is None:
+        raise ValueError(
+            "Dataset does not expose trajectory boundaries. "
+            "Expected `episode_starts` and `_valid_indices`."
+        )
+
+    num_trajectories = max(0, len(episode_starts) - 1)
+    if num_trajectories == 0:
+        raise ValueError("Dataset has no trajectories to split.")
+
+    if num_trajectories == 1:
+        all_indices = list(range(len(dataset)))
+        info = {
+            "num_trajectories": 1,
+            "train_trajectories": 1,
+            "eval_trajectories": 0,
+            "train_samples": len(all_indices),
+            "eval_samples": 0,
+        }
+        return Subset(dataset, all_indices), Subset(dataset, []), info
+
+    traj_ids = list(range(num_trajectories))
+    rng = random.Random(seed)
+    rng.shuffle(traj_ids)
+
+    eval_traj_count = max(min_eval_trajectories, int(round(num_trajectories * eval_ratio)))
+    eval_traj_count = min(eval_traj_count, num_trajectories - 1)
+
+    eval_traj_ids = set(traj_ids[:eval_traj_count])
+    train_indices = []
+    eval_indices = []
+
+    for subset_idx, real_idx in enumerate(valid_indices):
+        traj_idx = bisect_right(episode_starts, real_idx) - 1
+        if traj_idx in eval_traj_ids:
+            eval_indices.append(subset_idx)
+        else:
+            train_indices.append(subset_idx)
+
+    info = {
+        "num_trajectories": num_trajectories,
+        "train_trajectories": num_trajectories - eval_traj_count,
+        "eval_trajectories": eval_traj_count,
+        "train_samples": len(train_indices),
+        "eval_samples": len(eval_indices),
+    }
+
+    return Subset(dataset, train_indices), Subset(dataset, eval_indices), info

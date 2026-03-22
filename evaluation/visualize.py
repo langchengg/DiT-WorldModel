@@ -357,11 +357,23 @@ def plot_training_curves(
     try:
         import matplotlib.pyplot as plt
 
-        fig, axes = plt.subplots(1, len(history), figsize=(5 * len(history), 4))
-        if len(history) == 1:
+        plot_items = []
+        for name, values in history.items():
+            if values is None or len(values) == 0:
+                continue
+            if isinstance(values[0], dict):
+                continue
+            plot_items.append((name, values))
+
+        if not plot_items:
+            print("No plottable training history found. Skipping plot.")
+            return
+
+        fig, axes = plt.subplots(1, len(plot_items), figsize=(5 * len(plot_items), 4))
+        if len(plot_items) == 1:
             axes = [axes]
 
-        for ax, (name, values) in zip(axes, history.items()):
+        for ax, (name, values) in zip(axes, plot_items):
             ax.plot(values, linewidth=1.5)
             ax.set_title(name, fontsize=12)
             ax.set_xlabel("Epoch")

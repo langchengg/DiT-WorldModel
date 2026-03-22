@@ -196,7 +196,7 @@ pip install -r requirements.txt
 You can use either:
 
 - your own RECON directory containing `.hdf5` trajectory files, or
-- the repo's RECON code path with `data_dir: null`, which lets `RECONDataset` try its sample download path
+- the repo's RECON code path with `data_dir: null`, which now downloads the full RECON dataset by default
 
 Expected RECON structure:
 
@@ -270,11 +270,12 @@ python notebooks/04_navigation_demo.py --dataset tartan --data_dir /path/to/tart
 What this script does on real datasets:
 
 1. Loads `RECON` or `TartanDrive`.
-2. Splits the data into train and held-out evaluation subsets.
+2. Splits the data by full trajectories into train and held-out evaluation subsets.
 3. Builds the DiT world model with the correct 256-way action vocabulary.
-4. Trains on the training subset.
-5. Runs one-step next-frame prediction on held-out samples.
-6. Saves qualitative and quantitative evaluation artifacts.
+4. Sets `warmup_steps` and `total_steps` from the actual `steps_per_epoch`.
+5. Trains on the training subset.
+6. Runs one-step next-frame prediction on held-out samples and compares against a copy-last-frame baseline.
+7. Saves qualitative and quantitative evaluation artifacts.
 
 This is the notebook version of the full path. If you want one command sequence that best represents what the project is doing today on real data, use this notebook.
 
