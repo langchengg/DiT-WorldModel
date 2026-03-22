@@ -178,6 +178,66 @@ def collect_atari_data(game: str, num_steps: int = 10000, img_size: int = 64):
     return dataset
 
 
+def collect_metaworld_data(env_name: str, num_steps: int = 10000, img_size: int = 64):
+    """
+    Collect training data from MetaWorld environment.
+    Uses random policy for initial data collection.
+    """
+    import metaworld
+    import cv2
+    import random
+
+    ml1 = metaworld.ML1(env_name)
+    env = ml1.train_classes[env_name](render_mode="rgb_array")
+    task = random.choice(ml1.train_tasks)
+    env.set_task(task)
+
+    dataset = WorldModelDataset(obs_history_len=4, max_size=num_steps)
+    action_disc = ActionDiscretizer(action_dim=4, num_bins=256)
+
+    obs, info = env.reset()
+    frame = cv2.resize(env.render(), (img_size, img_size))
+    frame_t = torch.from_numpy(frame.copy()).permute(2, 0, 1).float() / 255.0
+
+    print(f"\n📦 Collecting {num_steps} frames from MetaWorld {env_name}...")
+
+    for step in range(num_steps):
+        action = env.action_space.sample()
+
+        next_obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+
+        next_frame = cv2.resize(env.render(), (img_size, img_size))
+            
+        next_frame_t = torch.from_numpy(next_frame.copy()).permute(2, 0, 1).float() / 255.0
+        
+        cont_action = torch.tensor(action, dtype=torch.float32).unsqueeze(0)
+        disc_action = action_disc.encode(cont_action).squeeze(0)
+        flat_action = disc_action[0]
+
+        dataset.add(
+            frame_t,
+            flat_action,
+            next_frame_t,
+            reward,
+            done,
+        )
+
+        frame_t = next_frame_t
+
+        if done:
+            obs, info = env.reset()
+            frame = cv2.resize(env.render(), (img_size, img_size))
+            frame_t = torch.from_numpy(frame.copy()).permute(2, 0, 1).float() / 255.0
+
+        if (step + 1) % 1000 == 0:
+            print(f"  Collected {step + 1}/{num_steps} frames")
+
+    env.close()
+    print(f"  Done! Dataset size: {len(dataset)}")
+    return dataset
+
+
 def demo_training(config: dict):
     """
     Demo training with synthetic data (no environment required).
@@ -265,9 +325,16 @@ def main():
         dataset = demo_training(config)
     else:
         env_cfg = config.get("environment", {})
-        game = env_cfg.get("game", "BreakoutNoFrameskip-v4")
+        env_type = env_cfg.get("type", "atari")
         img_size = config["model"].get("img_size", 64)
-        dataset = collect_atari_data(game, num_steps=10000, img_size=img_size)
+        
+        if env_type == "metaworld":
+            tasks = env_cfg.get("tasks", ["reach-v3"])
+            game = tasks[0] if isinstance(tasks, list) and len(tasks) > 0 else "reach-v3"
+            dataset = collect_metaworld_data(game, num_steps=10000, img_size=img_size)
+        else:
+            game = env_cfg.get("game", "BreakoutNoFrameskip-v4")
+            dataset = collect_atari_data(game, num_steps=10000, img_size=img_size)
 
     # DataLoader
     dataloader = DataLoader(

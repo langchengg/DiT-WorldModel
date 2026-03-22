@@ -189,33 +189,62 @@ for s, w in zip(scales, weights):
 
 
 # ============================================================
-# Cell 4: Simulated Robot Environment Training
+# Cell 4: MetaWorld Robot Environment Training
 # ============================================================
 
 """
-## 🤖 Robot World Model Training (Simulated Data)
+## 🤖 Robot World Model Training (MetaWorld Data)
 
-使用模拟数据测试完整的机器人训练管道.
-真实环境请使用 MetaWorld / RoboSuite.
+使用真实的 MetaWorld 数据集测试完整的机器人训练管道.
 """
 
-# Simulate robot dataset
-robot_dataset = WorldModelDataset(obs_history_len=4, max_size=3000)
+import metaworld
+import cv2
+import random
+
+# Initialize MetaWorld environment
+env_name = "reach-v3"
+ml1 = metaworld.ML1(env_name)
+env = ml1.train_classes[env_name](render_mode="rgb_array")
+task = random.choice(ml1.train_tasks)
+env.set_task(task)
+
+# Create real robot dataset
+num_steps = 3000
+img_size = 64
+robot_dataset = WorldModelDataset(obs_history_len=4, max_size=num_steps)
 action_disc = ActionDiscretizer(action_dim=4, num_bins=256)
 
-for i in range(3000):
-    obs = torch.rand(3, 64, 64)
-    next_obs = obs + 0.03 * torch.randn_like(obs)
-    next_obs = next_obs.clamp(0, 1)
+obs, info = env.reset()
+frame = cv2.resize(env.render(), (img_size, img_size))
+frame_t = torch.from_numpy(frame.copy()).permute(2, 0, 1).float() / 255.0
+
+print(f"\n📦 Collecting {num_steps} frames from MetaWorld {env_name}...")
+
+for step in range(num_steps):
+    action = env.action_space.sample()
+    
+    next_obs, reward, terminated, truncated, info = env.step(action)
+    done = terminated or truncated
+
+    next_frame = cv2.resize(env.render(), (img_size, img_size))
+    next_frame_t = torch.from_numpy(next_frame.copy()).permute(2, 0, 1).float() / 255.0
     
     # Continuous action → discrete
-    cont_action = torch.randn(4).clamp(-1, 1)
-    disc_action = action_disc.encode(cont_action.unsqueeze(0)).squeeze()
+    cont_action = torch.tensor(action, dtype=torch.float32).unsqueeze(0)
+    disc_action = action_disc.encode(cont_action).squeeze(0)
     flat_action = disc_action[0]  # Use first dimension as discrete action
     
-    reward = float(torch.randn(1).item() > 0)
-    done = i % 200 == 199
-    robot_dataset.add(obs, flat_action, next_obs, reward, done)
+    robot_dataset.add(frame_t, flat_action, next_frame_t, reward, done)
+
+    frame_t = next_frame_t
+
+    if done:
+        obs, info = env.reset()
+        frame = cv2.resize(env.render(), (img_size, img_size))
+        frame_t = torch.from_numpy(frame.copy()).permute(2, 0, 1).float() / 255.0
+
+env.close()
 
 robot_loader = DataLoader(
     robot_dataset, batch_size=16, shuffle=True, drop_last=True,
