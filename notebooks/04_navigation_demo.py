@@ -26,6 +26,9 @@
     # 仅在快速调试时下载 sample:
     python notebooks/04_navigation_demo.py --dataset recon --download_mode sample
 
+    # 按磁盘预算下载 RECON 子集 (适合 Kaggle):
+    python notebooks/04_navigation_demo.py --dataset recon --download_mode budget --max_download_gb 10
+
     # 使用 TartanDrive 数据集:
     python notebooks/04_navigation_demo.py --dataset tartan --data_dir /path/to/tartan
 
@@ -59,10 +62,12 @@ parser.add_argument("--batch_size", type=int, default=16,
 parser.add_argument("--eval_ratio", type=float, default=0.1,
                     help="Fraction of full trajectories reserved for eval")
 parser.add_argument("--download_mode", type=str, default="full",
-                    choices=["full", "sample"],
+                    choices=["full", "sample", "budget"],
                     help="RECON download mode when data_dir is omitted")
 parser.add_argument("--sample_num_files", type=int, default=3,
                     help="Number of RECON files to extract when using sample mode")
+parser.add_argument("--max_download_gb", type=float, default=None,
+                    help="Disk budget in GB when using RECON budget download mode")
 parser.add_argument("--max_trajectories", type=int, default=None,
                     help="Optional cap on RECON trajectories loaded after download")
 parser.add_argument("--max_runs", type=int, default=None,
@@ -132,6 +137,7 @@ dataset_kwargs = {
     "action_bins": ACTION_BINS,
     "download_mode": args.download_mode,
     "sample_num_files": args.sample_num_files,
+    "max_download_gb": args.max_download_gb,
     "max_trajectories": args.max_trajectories,
     "max_runs": args.max_runs,
 }

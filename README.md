@@ -255,6 +255,12 @@ Default command, real-data-first:
 python notebooks/04_navigation_demo.py
 ```
 
+Budgeted RECON download for disk-limited environments such as Kaggle:
+
+```bash
+python notebooks/04_navigation_demo.py --dataset recon --download_mode budget --max_download_gb 10
+```
+
 Explicit RECON path:
 
 ```bash

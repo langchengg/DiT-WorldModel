@@ -192,6 +192,7 @@ class RECONDataset(Dataset):
         max_trajectories: Optional[int] = None,
         download_mode: str = "full",
         sample_num_files: int = 3,
+        max_download_gb: Optional[float] = None,
     ):
         import h5py
         import cv2
@@ -201,16 +202,25 @@ class RECONDataset(Dataset):
         self.action_bins = action_bins
         self.download_mode = download_mode
 
-        if download_mode not in {"full", "sample"}:
+        if download_mode not in {"full", "sample", "budget"}:
             raise ValueError(
                 f"Unsupported RECON download_mode='{download_mode}'. "
-                "Choose from: full, sample"
+                "Choose from: full, sample, budget"
+            )
+        if download_mode == "budget" and (max_download_gb is None or max_download_gb <= 0):
+            raise ValueError(
+                "RECON budget mode requires a positive `max_download_gb` value."
             )
 
         # Resolve default storage location. Auto-download happens only if the
         # directory does not already contain trajectory files.
         if data_dir is None:
-            data_dir = "data/recon" if download_mode == "full" else "data/recon_sample"
+            if download_mode == "full":
+                data_dir = "data/recon"
+            elif download_mode == "sample":
+                data_dir = "data/recon_sample"
+            else:
+                data_dir = "data/recon_budget"
             os.makedirs(data_dir, exist_ok=True)
 
         data_path = Path(data_dir)
@@ -219,11 +229,17 @@ class RECONDataset(Dataset):
             hdf5_files = hdf5_files[:max_trajectories]
 
         if len(hdf5_files) == 0:
-            mode_desc = "full RECON dataset" if download_mode == "full" else "RECON sample"
+            if download_mode == "full":
+                mode_desc = "full RECON dataset"
+            elif download_mode == "sample":
+                mode_desc = "RECON sample"
+            else:
+                mode_desc = f"RECON budgeted subset (~{max_download_gb:.2f} GB)"
             print(f"⚠️  No HDF5 files found in {data_dir}. Downloading {mode_desc}...")
             self._download_dataset(
                 extract_dir=data_dir,
                 max_files=None if download_mode == "full" else sample_num_files,
+                max_download_gb=max_download_gb if download_mode == "budget" else None,
             )
             hdf5_files = sorted(data_path.glob("*.hdf5"))
 
@@ -344,22 +360,26 @@ class RECONDataset(Dataset):
         self,
         extract_dir: str,
         max_files: Optional[int] = None,
+        max_download_gb: Optional[float] = None,
     ) -> None:
         """
         Stream the RECON tarball and extract trajectory HDF5 files.
 
         If `max_files` is None, extract the full dataset. Otherwise extract only
         the first `max_files` trajectories for quick smoke tests.
+        If `max_download_gb` is set, stop before the extracted HDF5 bytes would
+        exceed that on-disk budget.
         """
         import tarfile
         import requests
 
         url = "http://rail.eecs.berkeley.edu/datasets/recon-navigation/recon_dataset.tar.gz"
-        mode_desc = (
-            "the full RECON dataset"
-            if max_files is None else
-            f"{max_files} RECON sample trajectories"
-        )
+        if max_download_gb is not None:
+            mode_desc = f"a RECON subset up to ~{max_download_gb:.2f} GB"
+        elif max_files is None:
+            mode_desc = "the full RECON dataset"
+        else:
+            mode_desc = f"{max_files} RECON sample trajectories"
         print(f"🌐 Streaming from {url} to extract {mode_desc}...")
 
         try:
@@ -368,6 +388,11 @@ class RECONDataset(Dataset):
                 with tarfile.open(fileobj=r.raw, mode="r|gz") as tar:
                     extracted_count = 0
                     skipped_existing = 0
+                    extracted_bytes = 0
+                    max_download_bytes = None
+                    if max_download_gb is not None:
+                        max_download_bytes = int(max_download_gb * (1024 ** 3))
+
                     for member in tar:
                         if member.name.endswith(".hdf5"):
                             filename = os.path.basename(member.name)
@@ -376,19 +401,41 @@ class RECONDataset(Dataset):
                             if os.path.exists(dest_path):
                                 skipped_existing += 1
                                 extracted_count += 1
+                                extracted_bytes += os.path.getsize(dest_path)
                             else:
+                                if (
+                                    max_download_bytes is not None
+                                    and extracted_bytes + member.size > max_download_bytes
+                                ):
+                                    remaining_gb = (
+                                        (max_download_bytes - extracted_bytes) / (1024 ** 3)
+                                    )
+                                    print(
+                                        f"  🛑 Stopping before {filename}: "
+                                        f"budget remaining {remaining_gb:.2f} GB, "
+                                        f"next file size {member.size / (1024 ** 3):.2f} GB."
+                                    )
+                                    break
+
                                 print(f"  ⬇️  Extracting {filename}...")
                                 f_in = tar.extractfile(member)
                                 if f_in is not None:
                                     with open(dest_path, "wb") as f_out:
                                         f_out.write(f_in.read())
                                     extracted_count += 1
+                                    extracted_bytes += os.path.getsize(dest_path)
 
                             if max_files is not None and extracted_count >= max_files:
                                 print(f"  ✅ Successfully extracted {max_files} sample files.")
                                 break
 
-                    if max_files is None:
+                    if max_download_gb is not None:
+                        print(
+                            f"  ✅ Finished extracting RECON budget subset into {extract_dir} "
+                            f"({extracted_count - skipped_existing} new files, "
+                            f"{extracted_bytes / (1024 ** 3):.2f} GB total)."
+                        )
+                    elif max_files is None:
                         print(
                             f"  ✅ Finished extracting RECON into {extract_dir} "
                             f"({extracted_count - skipped_existing} new files, "
@@ -645,7 +692,10 @@ def create_navigation_dataset(
     elif dataset_type == "recon":
         recon_kwargs = {
             k: v for k, v in kwargs.items()
-            if k in {"action_bins", "max_trajectories", "download_mode", "sample_num_files"}
+            if k in {
+                "action_bins", "max_trajectories", "download_mode",
+                "sample_num_files", "max_download_gb",
+            }
         }
         return RECONDataset(
             data_dir=data_dir, img_size=img_size,
