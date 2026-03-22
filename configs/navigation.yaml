@@ -1,0 +1,85 @@
+# Navigation Configuration
+# For World Model + MPC visual navigation experiments
+
+model:
+  architecture: "dit_small"
+  img_size: 64
+  patch_size: 4
+  in_channels: 6        # 3 (history) + 3 (noisy target)
+  hidden_size: 384
+  depth: 12
+  num_heads: 6
+  mlp_ratio: 4.0
+  action_dim: 4          # FORWARD, BACKWARD, TURN_LEFT, TURN_RIGHT
+  num_diffusion_steps: 1000
+  out_channels: 3
+  drop_rate: 0.1
+  num_reward_classes: 3
+
+diffusion:
+  num_timesteps: 1000
+  schedule_type: "cosine"
+  prediction_type: "epsilon"
+  loss_type: "mse"
+
+sampler:
+  num_steps: 20           # DDIM steps (fast inference)
+  eta: 0.0                # Deterministic sampling
+  clip_denoised: true
+
+# MPC Navigation Parameters
+navigation:
+  planning_horizon: 8     # Imagine 8 steps ahead
+  num_candidates: 32      # 32 candidate trajectories
+  method: "random_shooting"  # "random_shooting" or "cem"
+  cem_iterations: 3
+  cem_elite_ratio: 0.2
+
+# Dataset Configuration
+dataset:
+  type: "synthetic"       # "synthetic", "recon", or "tartan"
+  data_dir: null          # Required for recon/tartan
+  num_episodes: 50        # For synthetic dataset
+  episode_length: 100
+  grid_size: 8
+
+# Training
+training:
+  batch_size: 32
+  lr: 3e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  warmup_steps: 2000
+  total_steps: 50000
+  num_epochs: 50
+  use_amp: true
+  save_every: 5
+
+  progressive:
+    enabled: true
+    min_steps: 10
+    max_steps: 100
+    warmup_epochs: 5
+    schedule: "linear"
+
+# Grid Environment (for synthetic data)
+environment:
+  type: "navigation"
+  grid_size: 8
+  img_size: 64
+  max_episode_steps: 200
+  wall_ratio: 0.15
+
+# Collision Detection
+collision:
+  method: "done_signal"   # "done_signal", "cnn", "depth"
+  threshold: 0.5
+
+evaluation:
+  every: 10
+  num_navigation_episodes: 20
+  max_navigation_steps: 200
+
+wandb:
+  enabled: false
+  project: "dit-worldmodel-navigation"

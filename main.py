@@ -238,6 +238,32 @@ def collect_metaworld_data(env_name: str, num_steps: int = 10000, img_size: int 
     return dataset
 
 
+def collect_navigation_data(config: dict, img_size: int = 64):
+    """
+    Collect training data from navigation environment.
+    Supports synthetic grid, RECON, and TartanDrive datasets.
+    """
+    from navigation.dataset import create_navigation_dataset
+
+    env_cfg = config.get("environment", {})
+    ds_cfg = config.get("dataset", {})
+
+    dataset_type = ds_cfg.get("type", "synthetic")
+    data_dir = ds_cfg.get("data_dir", None)
+
+    dataset = create_navigation_dataset(
+        dataset_type=dataset_type,
+        data_dir=data_dir,
+        img_size=img_size,
+        obs_history_len=1,
+        num_episodes=ds_cfg.get("num_episodes", 50),
+        episode_length=ds_cfg.get("episode_length", 100),
+    )
+
+    print(f"  Navigation dataset ({dataset_type}): {len(dataset)} transitions")
+    return dataset
+
+
 def demo_training(config: dict):
     """
     Demo training with synthetic data (no environment required).
@@ -328,7 +354,9 @@ def main():
         env_type = env_cfg.get("type", "atari")
         img_size = config["model"].get("img_size", 64)
         
-        if env_type == "metaworld":
+        if env_type == "navigation":
+            dataset = collect_navigation_data(config, img_size=img_size)
+        elif env_type == "metaworld":
             tasks = env_cfg.get("tasks", ["reach-v3"])
             game = tasks[0] if isinstance(tasks, list) and len(tasks) > 0 else "reach-v3"
             dataset = collect_metaworld_data(game, num_steps=10000, img_size=img_size)
