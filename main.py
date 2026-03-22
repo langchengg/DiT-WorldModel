@@ -56,11 +56,22 @@ def build_model(config: dict) -> DiTWorldModel:
     model_cfg = config["model"]
     arch = model_cfg.get("architecture", "dit_small")
 
+    env_cfg = config.get("environment", {})
+    ds_cfg = config.get("dataset", {})
+    action_dim = model_cfg.get("action_dim", 18)
+
+    if env_cfg.get("type") == "navigation":
+        dataset_type = ds_cfg.get("type", "synthetic")
+        if dataset_type in ("recon", "tartan"):
+            action_dim = ds_cfg.get("action_bins", 256)
+        else:
+            action_dim = model_cfg.get("action_dim", 4)
+
     common_kwargs = {
         "img_size": model_cfg.get("img_size", 64),
         "patch_size": model_cfg.get("patch_size", 4),
         "in_channels": model_cfg.get("in_channels", 6),
-        "action_dim": model_cfg.get("action_dim", 18),
+        "action_dim": action_dim,
         "num_diffusion_steps": model_cfg.get("num_diffusion_steps", 1000),
         "out_channels": model_cfg.get("out_channels", 3),
         "drop_rate": model_cfg.get("drop_rate", 0.0),
@@ -256,6 +267,9 @@ def collect_navigation_data(config: dict, img_size: int = 64):
         data_dir=data_dir,
         img_size=img_size,
         obs_history_len=1,
+        action_bins=ds_cfg.get("action_bins", 256),
+        max_trajectories=ds_cfg.get("max_trajectories", None),
+        max_runs=ds_cfg.get("max_runs", None),
         num_episodes=ds_cfg.get("num_episodes", 50),
         episode_length=ds_cfg.get("episode_length", 100),
     )

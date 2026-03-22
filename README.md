@@ -1,67 +1,48 @@
 # DiT-WorldModel
 
-DiT-WorldModel is an action-conditioned diffusion world model that uses a Diffusion Transformer (DiT) backbone for future-frame generation, next-observation modeling, and short visual rollouts. This repository contains model code, training loops, dataset loaders, action discretization utilities, navigation demos, and visualization helpers for experiments across real navigation datasets, simulator rollouts, and synthetic debugging setups.
+DiT-WorldModel is an action-conditioned diffusion world model with a Diffusion Transformer (DiT) backbone for next-observation modeling, future-frame generation, and short visual rollouts.
 
-## Project Status
+This repository now follows a real-data-first navigation workflow:
 
-This repository is research code in progress, not a finished benchmark release.
+- Default navigation config: `RECON`
+- Optional second real dataset: `TartanDrive`
+- Synthetic grid world: debugging and MPC-only
+- MetaWorld and Atari: simulator rollouts, not real datasets
 
-The current checkout mixes three data regimes:
+## What This Repository Does End to End
 
-- Real public datasets: RECON, TartanDrive
-- Simulator rollouts collected online: MetaWorld, Atari
-- Synthetic or debug data: GridNavigationEnv, demo random tensors, notebook-generated toy data
+From start to finish, the navigation pipeline does the following:
 
-Only publish results that you reproduced from your own runs and saved artifacts. This README intentionally does not include benchmark tables, claimed percentage gains, or paper-style result summaries that are not backed by bundled logs and evaluation outputs.
+1. Load a dataset of transitions.
+2. Convert each transition into the unified training format:
+   `obs_history`, `obs_next`, `action`, `reward`, `done`
+3. For real datasets (`RECON`, `TartanDrive`), discretize continuous controls into a 256-way action vocabulary.
+4. Train a DiT-based diffusion world model to predict the next observation, plus reward and termination heads.
+5. Run DDIM sampling on held-out data to generate predicted next frames.
+6. Save training curves, side-by-side comparisons, qualitative panels, videos, and evaluation metrics.
+7. If you explicitly choose synthetic data, the repo can also run MPC navigation inside `GridNavigationEnv`.
 
-Important scope notes:
+If your goal is a publishable README or a results page, use `RECON` or `TartanDrive`, not synthetic data.
 
-- `data/recon_sample/recon_datavis.tar.gz` is a RECON visualization package archive, not a ready-to-train RECON sample dataset.
-- `configs/navigation.yaml` defaults to synthetic grid data unless you edit the dataset block.
-- `notebooks/04_navigation_demo.py` can train on `recon` or `tartan`, but its imagination, trajectory comparison, and MPC visualization steps still switch to `GridNavigationEnv`.
-- The current repository snapshot does not include a root `LICENSE` file, so licensing should be clarified before public release.
+## Real Data vs Simulator vs Synthetic
 
-## What Is Implemented
-
-- DiT-based world model architecture in `models/dit_world_model.py`
-- Diffusion training and DDIM sampling in `models/diffusion.py`
-- Progressive diffusion scheduling in `training/progressive_schedule.py`
-- Continuous-action discretization in `models/action_discretizer.py`
-- Dataset loaders for RECON, TartanDrive, and synthetic navigation in `navigation/dataset.py`
-- Training loop, checkpoints, and visualization utilities in `training/` and `evaluation/`
-- World-model-driven navigation utilities and video export in `navigation/`
-
-## Supported Data Sources
-
-| Source | Type | How data is obtained | Can be shown as real-data result in README |
+| Source | Category | How it is used here | Should you present it as real-data evidence? |
 | --- | --- | --- | --- |
-| RECON | Real public dataset | Loaded from HDF5 trajectories via `RECONDataset`; requires real RECON files or a successful dataset download path | Yes, if the figure or metric comes from held-out RECON sequences |
-| TartanDrive | Real public dataset | Loaded from downloaded run directories via `TartanDriveDataset` | Yes, if the figure or metric comes from held-out TartanDrive sequences |
-| MetaWorld | Simulator environment | Collected online from `metaworld` environments in `main.py` and `notebooks/03_robotic_transfer.py` | No |
-| Atari | Simulator environment | Collected online from `gymnasium` Atari environments in `main.py` | No |
-| `GridNavigationEnv` / `SyntheticNavigationDataset` | Synthetic or debug | Generated inside the repository | No |
-| `main.py --demo` random data | Synthetic or debug | Random tensors, random actions, and random rewards | No |
-| Notebook toy action and sequence examples | Synthetic or debug | Notebook cells synthesize action samples, observation sequences, or augmentation inputs | No |
+| RECON | Real public dataset | Real outdoor navigation trajectories loaded from HDF5 files | Yes |
+| TartanDrive | Real public dataset | Real off-road driving runs loaded from image folders and control files | Yes |
+| MetaWorld | Simulator | Online rollouts collected from simulator environments | No |
+| Atari | Simulator | Online rollouts collected from Gymnasium Atari environments | No |
+| GridNavigationEnv | Synthetic | Local grid-world generator for debugging and MPC demos | No |
+| `main.py --demo` | Synthetic | Random tensors and random rewards for smoke testing | No |
+| Notebook toy examples | Synthetic | Simulated action distributions and synthetic image sequences | No |
 
-Notes:
+Important note:
 
-- The RECON loader expects `.hdf5` trajectory files. The bundled `recon_datavis` archive is not that dataset.
-- MetaWorld and Atari are useful experimental environments, but they are not real-world datasets and should not be described that way in project-facing results.
+- `data/recon_sample/recon_datavis.tar.gz` is not a ready-to-train RECON sample dataset. It is a visualization package archive.
 
-## Repository Layout
+## Start Here: Real-Data Workflow
 
-| Path | Purpose |
-| --- | --- |
-| `configs/` | Training and environment configurations |
-| `models/` | DiT world model, diffusion process, temporal attention, action discretization |
-| `training/` | Trainer, augmentation, progressive schedulers |
-| `navigation/` | Dataset loaders, grid simulator, navigation logic, visualization |
-| `evaluation/` | Metrics and figure/video export utilities |
-| `notebooks/` | Reproduction, ablation, robotic transfer, and navigation demo scripts |
-| `data/` | Local dataset cache or manually prepared data |
-| `outputs/`, `results/` | Checkpoints and generated artifacts |
-
-## Setup
+### Step 1. Install dependencies
 
 ```bash
 git clone https://github.com/langchengg/DiT-WorldModel.git
@@ -72,73 +53,94 @@ conda activate wm
 pip install -r requirements.txt
 ```
 
-Dependency notes:
+### Step 2. Decide which real dataset you want to use
 
-- `metaworld` is only needed for simulator-based robotic runs.
-- `gymnasium` and `ale-py` are only needed for Atari runs.
-- `h5py` and `opencv-python` are needed for RECON or TartanDrive loading.
+#### Option A: RECON
 
-## Training and Evaluation Commands
+You can use either:
 
-### Smoke test
+- your own RECON directory containing `.hdf5` trajectory files, or
+- the repo's RECON code path with `data_dir: null`, which lets `RECONDataset` try its sample download path
 
-```bash
-python main.py --config configs/dit_small.yaml --demo --epochs 5
+Expected RECON structure:
+
+```text
+/path/to/recon/
+  traj_0000.hdf5
+  traj_0001.hdf5
+  ...
 ```
 
-This is a synthetic debug run. It is useful for checking that the training loop, checkpointing, and plotting code execute, but it is not a real-data experiment.
+#### Option B: TartanDrive
 
-### Atari simulator rollout training
+Expected TartanDrive structure:
 
-```bash
-python main.py --config configs/dit_small.yaml
+```text
+/path/to/tartan/
+  run_0001/
+    image_left/
+      000000.png
+      000001.png
+      ...
+    cmd.npy
+  run_0002/
+  ...
 ```
 
-This collects data online from an Atari environment and trains on those simulator rollouts.
+### Step 3. Run the real-data training pipeline
 
-### MetaWorld simulator rollout training
+#### Option A: Main training entrypoint, defaulted to real navigation data
 
-```bash
-python main.py --config configs/robotic_env.yaml
-```
-
-This collects data online from MetaWorld and trains on simulator rollouts. It is not a real robot dataset pipeline.
-
-### Navigation training pipeline
+`configs/navigation.yaml` now defaults to `RECON` and a 256-bin action space for real navigation data.
 
 ```bash
 python main.py --config configs/navigation.yaml
 ```
 
-This command exists, but the default `configs/navigation.yaml` uses synthetic grid data. For real navigation data, update the dataset block or use the notebook command surface below.
+What this does:
 
-### RECON navigation demo
+1. Builds the navigation dataset loader.
+2. Uses `RECON` by default unless you change the config.
+3. Resolves the action vocabulary correctly for real datasets.
+4. Trains the DiT world model.
+5. Saves checkpoints and training curves.
 
-```bash
-python notebooks/04_navigation_demo.py --dataset recon --data_dir /path/to/recon
-```
-
-### TartanDrive navigation demo
-
-```bash
-python notebooks/04_navigation_demo.py --dataset tartan --data_dir /path/to/tartan
-```
-
-These notebook commands load real navigation datasets for the training stage. The later visualization and MPC stages still switch to the synthetic grid environment, so the resulting navigation figures are not real-dataset evaluation outputs.
-
-## Output Files Produced by the Current Code
-
-### `main.py`
-
-By default, `main.py` writes:
+Main outputs:
 
 - `outputs/checkpoints/checkpoint_epoch_XXXX.pt`
 - `outputs/checkpoints/best_model.pt`
 - `outputs/training_curves.png`
 
-### `notebooks/04_navigation_demo.py`
+#### Option B: End-to-end notebook script for real-data training plus held-out evaluation
 
-When the corresponding stages complete, the current script writes:
+Default command, real-data-first:
+
+```bash
+python notebooks/04_navigation_demo.py
+```
+
+Explicit RECON path:
+
+```bash
+python notebooks/04_navigation_demo.py --dataset recon --data_dir /path/to/recon
+```
+
+Explicit TartanDrive path:
+
+```bash
+python notebooks/04_navigation_demo.py --dataset tartan --data_dir /path/to/tartan
+```
+
+What this script does on real datasets:
+
+1. Loads `RECON` or `TartanDrive`.
+2. Splits the data into train and held-out evaluation subsets.
+3. Builds the DiT world model with the correct 256-way action vocabulary.
+4. Trains on the training subset.
+5. Runs one-step next-frame prediction on held-out samples.
+6. Saves qualitative and quantitative evaluation artifacts.
+
+Real-data outputs from `notebooks/04_navigation_demo.py`:
 
 - `outputs/navigation/training_curves.png`
 - `outputs/navigation/4_frames_comparison.png`
@@ -146,33 +148,40 @@ When the corresponding stages complete, the current script writes:
 - `outputs/navigation/navigation.mp4`
 - `outputs/navigation/navigation_metrics.png`
 
-Notes:
+### Step 4. Understand what each output means
 
-- The current script does not save `imagination_demo.png` or `ground_truth_comparison.png`, even if older files with those names may already exist in a working directory.
-- `4_frames_comparison.png` is generated from `GridNavigationEnv` in the current script, not from held-out RECON or TartanDrive sequences.
+For real datasets (`recon` or `tartan`):
 
-## What To Show After Full Training
+- `training_curves.png`
+  Training loss curves from the real-data run
+- `4_frames_comparison.png`
+  Held-out next-frame comparison: ground truth vs prediction
+- `navigation_episode.png`
+  Held-out qualitative panel: context frame, ground-truth next frame, predicted next frame
+- `navigation.mp4`
+  Real-data qualitative video built from held-out predictions
+- `navigation_metrics.png`
+  Held-out evaluation metrics such as SSIM, PSNR, and LPIPS across samples
 
-If you want a results section built around real data, keep it restricted to RECON or TartanDrive runs and use held-out sequences.
+For synthetic data only:
 
-Recommended result figures:
+- `navigation_episode.png`, `navigation.mp4`, and `navigation_metrics.png`
+  represent MPC navigation inside `GridNavigationEnv`, not real-data evaluation
 
-| Figure | What it should show | Safe to present as real-data result |
-| --- | --- | --- |
-| Held-out sample grid | Raw frames from the evaluation split | Yes |
-| Ground truth vs prediction vs absolute difference | One-step next-observation comparison on held-out real sequences | Yes |
-| Multi-step rollout strip | Short rollout on held-out real sequences with ground truth and predicted rows | Yes |
-| Training and validation curves | Loss and evaluation metrics from the real-data run | Yes |
-| Denoising strip | Intermediate denoising states for one held-out real frame | Yes |
-| Dataset statistics plot | Action histograms, trajectory lengths, frame counts, or split summary from the real dataset | Yes |
+### Step 5. Use only real-data results in your public presentation
 
-Method or background figures are still useful, but they belong in a methods section rather than a results section. Good examples:
+If you are writing a README, report, or project page, use figures from held-out `RECON` or `TartanDrive` runs only.
 
-- Diffusion schedule diagram
-- Denoising-process illustration
-- Architecture diagram
+Good result figures:
 
-Do not use the following current repository assets as empirical real-data results:
+- held-out sample grid from the raw dataset
+- ground truth vs prediction vs absolute difference
+- short held-out rollout strip
+- training and validation curves
+- denoising strip for one held-out frame
+- dataset statistics plot from real trajectories
+
+Do not present these current assets as real-data evidence:
 
 - `all_images/demo_training_loss.png`
 - `all_images/imagination.png`
@@ -180,34 +189,85 @@ Do not use the following current repository assets as empirical real-data result
 - `all_images/temporal_augmentation.png`
 - `all_images/robot_training.png`
 
-Additional caution:
+## Synthetic and Simulator Workflows
 
-- The current `outputs/navigation/4_frames_comparison.png`
-- The current `outputs/navigation/navigation_episode.png`
-- The current `outputs/navigation/navigation.mp4`
-- The current `outputs/navigation/navigation_metrics.png`
+These still exist, but they are no longer the main path.
 
-should be treated as synthetic-environment visuals unless the evaluation path is changed to use held-out RECON or TartanDrive sequences instead of `GridNavigationEnv`.
+### Synthetic debugging only
 
-## Limitations and Honesty Notes
+```bash
+python notebooks/04_navigation_demo.py --dataset synthetic
+```
 
-- `notebooks/03_robotic_transfer.py` refers to MetaWorld as if it were a real dataset in some comments, but the code actually collects simulator rollouts online.
-- `notebooks/01_reproduction.py` and `notebooks/02_dit_ablation.py` use synthetic data for demos and ablations.
-- `main.py --demo` is a random-data smoke test, not a benchmark run.
-- `notebooks/04_navigation_demo.py` currently mixes real-data training with synthetic-environment evaluation visuals.
-- No reproduced real-data benchmark table is bundled with this repository snapshot.
+Use this only if you want:
 
-## Suggested Results Section for Your Own Runs
+- a CPU-friendly smoke test
+- MPC navigation in the grid world
+- debugging of the sampler, planner, or visualization code
 
-Once you have completed real-data training, a good README results section should report:
+### Random-data smoke test
 
-- Dataset and split
-- Exact command or config used
-- Checkpoint path
-- Metrics computed on held-out real sequences
-- Figures generated from held-out real sequences only
+```bash
+python main.py --config configs/dit_small.yaml --demo --epochs 5
+```
 
-If you add metrics, make the source split and evaluation script explicit. Do not mix simulator visuals and real-dataset visuals in the same results table without labeling them.
+This is not a real experiment.
+
+### Simulator-only workflows
+
+Atari:
+
+```bash
+python main.py --config configs/dit_small.yaml
+```
+
+MetaWorld:
+
+```bash
+python main.py --config configs/robotic_env.yaml
+```
+
+These are simulator rollouts, not real datasets.
+
+## File and Module Guide
+
+| Path | What it does |
+| --- | --- |
+| `configs/navigation.yaml` | Real-data-first navigation training config |
+| `main.py` | Main training entrypoint |
+| `navigation/dataset.py` | RECON, TartanDrive, and synthetic dataset loaders |
+| `notebooks/04_navigation_demo.py` | End-to-end navigation demo; real data uses held-out evaluation, synthetic uses MPC |
+| `models/dit_world_model.py` | DiT world model |
+| `models/diffusion.py` | Diffusion process, DDIM sampler, world model environment |
+| `training/trainer.py` | Training loop and checkpointing |
+| `evaluation/metrics.py` | SSIM, PSNR, LPIPS, FID utilities |
+| `evaluation/visualize.py` | Grid, video, and curve plotting helpers |
+
+## Current Honesty Notes
+
+- The repo mixes real datasets, simulators, and synthetic data, but the default navigation path is now real-data-first.
+- `MetaWorld` comments in some notebooks may still read like “real data”, but the code is simulator rollout collection.
+- `Atari` is also simulator data.
+- `GridNavigationEnv` is useful for MPC demos, but it is not a real dataset.
+- This repository snapshot still does not include a root `LICENSE` file.
+
+## Recommended Public Results Section Template
+
+When you finish training on real data, structure your results section like this:
+
+1. Dataset and split
+2. Exact command used
+3. Checkpoint path
+4. Held-out metrics
+5. Held-out qualitative figures
+6. Clear note that simulator and synthetic runs are not included as evidence
+
+Example fields:
+
+- Dataset: `RECON`
+- Split: train / held-out eval
+- Command: `python notebooks/04_navigation_demo.py --dataset recon --data_dir /path/to/recon`
+- Outputs: `4_frames_comparison.png`, `navigation_episode.png`, `navigation.mp4`, `navigation_metrics.png`
 
 ## References
 

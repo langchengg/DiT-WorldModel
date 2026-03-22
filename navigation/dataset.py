@@ -498,6 +498,21 @@ class TartanDriveDataset(Dataset):
 # Utility: Create dataset from config
 # ---------------------------------------------------------------------------
 
+def get_navigation_action_dim(
+    dataset_type: str = "synthetic",
+    action_bins: int = 256,
+) -> int:
+    """
+    Resolve the discrete action vocabulary size for each navigation dataset.
+
+    Synthetic grid navigation uses 4 fixed actions.
+    RECON and TartanDrive discretize 2D continuous controls into `action_bins`.
+    """
+    if dataset_type == "synthetic":
+        return 4
+    return action_bins
+
+
 def create_navigation_dataset(
     dataset_type: str = "synthetic",
     data_dir: Optional[str] = None,
@@ -519,20 +534,32 @@ def create_navigation_dataset(
         Dataset instance.
     """
     if dataset_type == "synthetic":
+        synthetic_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in {"num_episodes", "episode_length", "grid_size", "seed"}
+        }
         return SyntheticNavigationDataset(
-            img_size=img_size, obs_history_len=obs_history_len, **kwargs,
+            img_size=img_size, obs_history_len=obs_history_len, **synthetic_kwargs,
         )
     elif dataset_type == "recon":
+        recon_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in {"action_bins", "max_trajectories"}
+        }
         return RECONDataset(
             data_dir=data_dir, img_size=img_size,
-            obs_history_len=obs_history_len, **kwargs,
+            obs_history_len=obs_history_len, **recon_kwargs,
         )
     elif dataset_type == "tartan":
         if data_dir is None:
             raise ValueError("data_dir required for TartanDrive dataset")
+        tartan_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in {"action_bins", "max_runs"}
+        }
         return TartanDriveDataset(
             data_dir=data_dir, img_size=img_size,
-            obs_history_len=obs_history_len, **kwargs,
+            obs_history_len=obs_history_len, **tartan_kwargs,
         )
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}. "

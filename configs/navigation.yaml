@@ -10,7 +10,7 @@ model:
   depth: 12
   num_heads: 6
   mlp_ratio: 4.0
-  action_dim: 4          # FORWARD, BACKWARD, TURN_LEFT, TURN_RIGHT
+  action_dim: 256        # Real datasets use discretized control bins; synthetic still resolves to 4 in code
   num_diffusion_steps: 1000
   out_channels: 3
   drop_rate: 0.1
@@ -37,11 +37,14 @@ navigation:
 
 # Dataset Configuration
 dataset:
-  type: "synthetic"       # "synthetic", "recon", or "tartan"
-  data_dir: null          # Required for recon/tartan
-  num_episodes: 50        # For synthetic dataset
-  episode_length: 100
-  grid_size: 8
+  type: "recon"           # "recon", "tartan", or "synthetic"
+  data_dir: null          # null lets RECONDataset try its sample download path
+  action_bins: 256        # Flattened action vocabulary for RECON/TartanDrive
+  max_trajectories: null  # Optional cap for RECON
+  max_runs: null          # Optional cap for TartanDrive
+  num_episodes: 50        # Used only for synthetic dataset
+  episode_length: 100     # Used only for synthetic dataset
+  grid_size: 8            # Used only for synthetic dataset
 
 # Training
 training:
