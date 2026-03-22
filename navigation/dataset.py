@@ -226,24 +226,27 @@ class RECONDataset(Dataset):
         for f_path in hdf5_files:
             try:
                 with h5py.File(str(f_path), "r") as f:
-                    images = f["observations/images"][:]    # (T, H, W, 3)
-                    actions_raw = f["actions"][:]            # (T, 2)
+                    images, actions_raw, collision_any = self._read_recon_file(f)
 
                     self.episode_starts.append(len(self.observations))
 
                     for t in range(len(images)):
-                        # Resize image
-                        img = cv2.resize(images[t], (img_size, img_size))
+                        img = self._decode_image(images[t])
+                        if img is None:
+                            continue
+                        img = cv2.resize(img, (img_size, img_size))
                         img_t = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
                         self.observations.append(img_t)
 
                         if t < len(images) - 1:
-                            # Discretize 2D action → bin
                             act = actions_raw[t]
                             act_bin = self._discretize_action(act)
                             self.actions.append(act_bin)
                             self.rewards.append(0.0)
-                            self.dones.append(False)
+                            done_flag = False
+                            if collision_any is not None and t + 1 < len(collision_any):
+                                done_flag = bool(collision_any[t + 1])
+                            self.dones.append(done_flag)
 
                     # Mark last step as done
                     if len(self.dones) > 0:
@@ -254,9 +257,73 @@ class RECONDataset(Dataset):
         self.episode_starts.append(len(self.observations))
         self._build_valid_indices()
 
+        if len(self._valid_indices) == 0:
+            raise RuntimeError(
+                "RECON files were found but no valid transitions could be loaded. "
+                "This usually means the HDF5 schema does not match the loader or "
+                "the extracted sample files are incomplete."
+            )
+
         print(f"  ✅ Loaded {len(hdf5_files)} trajectories, "
               f"{len(self.observations)} frames, "
               f"{len(self._valid_indices)} valid transitions")
+
+    @staticmethod
+    def _decode_image(image_item):
+        import cv2
+
+        if isinstance(image_item, np.ndarray) and image_item.ndim == 3:
+            if image_item.shape[-1] == 3:
+                return image_item
+            return None
+
+        if isinstance(image_item, np.ndarray):
+            raw = image_item.tobytes()
+        else:
+            raw = bytes(image_item)
+
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        if arr.size == 0:
+            return None
+
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return None
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        return img
+
+    @staticmethod
+    def _read_recon_file(h5_file):
+        """
+        Support both the originally assumed schema and the actual RECON sample
+        schema where images are JPEG bytes and controls live under `commands/`.
+        """
+        if "observations" in h5_file and "images" in h5_file["observations"]:
+            images = h5_file["observations/images"][:]
+            actions_raw = h5_file["actions"][:]
+            collision_any = None
+            return images, actions_raw, collision_any
+
+        if (
+            "images" in h5_file and "rgb_left" in h5_file["images"]
+            and "commands" in h5_file
+            and "linear_velocity" in h5_file["commands"]
+            and "angular_velocity" in h5_file["commands"]
+        ):
+            images = h5_file["images/rgb_left"][:]
+            linear_velocity = h5_file["commands/linear_velocity"][:]
+            angular_velocity = h5_file["commands/angular_velocity"][:]
+            actions_raw = np.stack([linear_velocity, angular_velocity], axis=-1)
+            collision_any = None
+            if "collision" in h5_file and "any" in h5_file["collision"]:
+                collision_any = h5_file["collision/any"][:]
+            return images, actions_raw, collision_any
+
+        available = list(h5_file.keys())
+        raise KeyError(
+            "Unsupported RECON HDF5 schema. Top-level keys: "
+            f"{available}"
+        )
 
     def _download_sample(self, extract_dir: str, num_files: int = 3) -> None:
         """

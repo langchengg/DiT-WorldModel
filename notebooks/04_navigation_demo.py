@@ -121,6 +121,12 @@ dataset = create_navigation_dataset(
     **dataset_kwargs,
 )
 
+if len(dataset) == 0:
+    raise RuntimeError(
+        f"Loaded dataset '{args.dataset}' but found 0 valid transitions. "
+        "Check that the downloaded files match the expected schema and are not corrupted."
+    )
+
 eval_size = 0
 if len(dataset) > 8:
     eval_size = min(max(4, len(dataset) // 10), len(dataset) - 1)
