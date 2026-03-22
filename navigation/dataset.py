@@ -225,21 +225,39 @@ class RECONDataset(Dataset):
 
         data_path = Path(data_dir)
         hdf5_files = sorted(data_path.glob("*.hdf5"))
+        current_download_bytes = sum(f.stat().st_size for f in hdf5_files)
         if max_trajectories:
             hdf5_files = hdf5_files[:max_trajectories]
 
-        if len(hdf5_files) == 0:
+        should_download = len(hdf5_files) == 0
+        if (
+            download_mode == "budget"
+            and max_download_gb is not None
+            and current_download_bytes < int(max_download_gb * (1024 ** 3))
+        ):
+            should_download = True
+
+        if should_download:
             if download_mode == "full":
                 mode_desc = "full RECON dataset"
             elif download_mode == "sample":
                 mode_desc = "RECON sample"
             else:
                 mode_desc = f"RECON budgeted subset (~{max_download_gb:.2f} GB)"
-            print(f"⚠️  No HDF5 files found in {data_dir}. Downloading {mode_desc}...")
+            if len(hdf5_files) == 0:
+                print(f"⚠️  No HDF5 files found in {data_dir}. Downloading {mode_desc}...")
+            else:
+                print(
+                    f"ℹ️  Found {len(hdf5_files)} existing RECON files in {data_dir} "
+                    f"({current_download_bytes / (1024 ** 3):.2f} GB). "
+                    f"Continuing download toward {mode_desc}..."
+                )
+            download_max_files = sample_num_files if download_mode == "sample" else None
+            download_max_gb = max_download_gb if download_mode == "budget" else None
             self._download_dataset(
                 extract_dir=data_dir,
-                max_files=None if download_mode == "full" else sample_num_files,
-                max_download_gb=max_download_gb if download_mode == "budget" else None,
+                max_files=download_max_files,
+                max_download_gb=download_max_gb,
             )
             hdf5_files = sorted(data_path.glob("*.hdf5"))
 
