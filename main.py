@@ -44,6 +44,18 @@ from evaluation.metrics import MetricsTracker
 from evaluation.visualize import FrameVisualizer, plot_training_curves
 
 
+def resolve_output_dir(path_str: str) -> Path:
+    """
+    Save outputs under /kaggle/working when running on Kaggle so they can be
+    preserved as notebook artifacts after a saved run.
+    """
+    output_path = Path(path_str)
+    kaggle_working = Path("/kaggle/working")
+    if kaggle_working.exists() and not output_path.is_absolute():
+        return kaggle_working / output_path
+    return output_path
+
+
 def load_config(config_path: str) -> dict:
     """Load YAML configuration file."""
     with open(config_path, "r") as f:
@@ -326,6 +338,7 @@ def main():
 
     # Load config
     config = load_config(args.config)
+    output_dir = resolve_output_dir(args.output_dir)
 
     # Override with CLI args
     train_cfg = config.get("training", {})
@@ -348,6 +361,7 @@ def main():
         device = args.device
 
     print(f"🖥️  Device: {device}")
+    print(f"📁 Output dir: {output_dir}")
 
     # Set seed
     torch.manual_seed(42)
@@ -399,7 +413,7 @@ def main():
         use_amp=train_cfg.get("use_amp", True) and device == "cuda",
         device=device,
         save_every=train_cfg.get("save_every", 5),
-        output_dir=args.output_dir,
+        output_dir=str(output_dir),
         progressive_scheduler=progressive.diffusion if progressive else None,
         use_wandb=config.get("wandb", {}).get("enabled", False),
     )
@@ -418,11 +432,11 @@ def main():
     )
 
     # Plot training curves
-    plot_training_curves(history, f"{args.output_dir}/training_curves.png")
+    plot_training_curves(history, str(output_dir / "training_curves.png"))
 
     print("\n✅ Training complete!")
-    print(f"   Checkpoints saved to: {args.output_dir}/checkpoints/")
-    print(f"   Training curves: {args.output_dir}/training_curves.png")
+    print(f"   Checkpoints saved to: {output_dir / 'checkpoints'}")
+    print(f"   Training curves: {output_dir / 'training_curves.png'}")
 
 
 if __name__ == "__main__":

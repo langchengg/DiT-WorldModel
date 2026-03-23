@@ -98,8 +98,21 @@ torch.manual_seed(42)
 np.random.seed(42)
 random.seed(42)
 
-OUTPUT_DIR = Path("outputs/navigation")
+
+def resolve_output_dir(relative_path: str) -> Path:
+    """
+    Save outputs under /kaggle/working when running on Kaggle so they can be
+    captured as notebook output artifacts.
+    """
+    kaggle_working = Path("/kaggle/working")
+    if kaggle_working.exists():
+        return kaggle_working / relative_path
+    return Path(relative_path)
+
+
+OUTPUT_DIR = resolve_output_dir("outputs/navigation")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+print(f"📁 Output dir: {OUTPUT_DIR}")
 
 REAL_DATASETS = {"recon", "tartan"}
 ACTION_BINS = 256
@@ -284,7 +297,7 @@ if not args.skip_training:
         total_steps=total_train_steps,
         use_amp=(device == "cuda"),
         device=device,
-        output_dir="outputs/navigation",
+        output_dir=str(OUTPUT_DIR),
         progressive_scheduler=prog_sched,
         save_every=5,
     )
@@ -305,6 +318,7 @@ if not args.skip_training:
         plot_training_curves(history, str(OUTPUT_DIR / "training_curves.png"))
     except Exception as e:
         print(f"  ⚠️ Could not plot training curves: {e}")
+    print(f"  Saved training outputs to: {OUTPUT_DIR}")
 else:
     print("\n⏭️  Skipping training (using random weights)")
     model.to(device)
@@ -418,6 +432,7 @@ if args.dataset == "synthetic":
 
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR / "4_frames_comparison.png", dpi=150)
+    print(f"  Saved imagination demo to: {OUTPUT_DIR / '4_frames_comparison.png'}")
     plt.close()
     print(f"  ✅ Saved 4-frame comparison to: {OUTPUT_DIR / '4_frames_comparison.png'}")
 else:
